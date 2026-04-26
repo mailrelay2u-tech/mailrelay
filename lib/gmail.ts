@@ -58,10 +58,11 @@ export async function pollAndForward(
 
   // Poll both INBOX and Spam — Gmail often filters legitimate emails to Spam
   const folders = ['INBOX', '[Gmail]/Spam']
+  // Max emails to process per folder per cycle — prevents timeout on large inboxes
+  const BATCH_SIZE = 25
 
   try {
     for (const folder of folders) {
-      // getMailboxLock throws if folder doesn't exist — skip gracefully
       let lock
       try { lock = await client.getMailboxLock(folder) } catch { continue }
 
@@ -70,7 +71,10 @@ export async function pollAndForward(
         const uidList = Array.isArray(uids) ? uids : []
         if (!uidList.length) continue
 
-        const messages = client.fetch(uidList, { envelope: true, source: true }, { uid: true })
+        // Take only the NEWEST batch — UIDs are ascending so slice from end
+        const batchUids = uidList.slice(-BATCH_SIZE)
+
+        const messages = client.fetch(batchUids, { envelope: true, source: true }, { uid: true })
 
         for await (const msg of messages) {
           const subject = msg.envelope?.subject || ''
