@@ -375,3 +375,29 @@ $$;
 -- 7. Account created, code marked used → new user signs in at /login
 --
 -- ============================================================
+-- POLLING CRON (Supabase pg_cron + pg_net)
+-- Runs every 1 minute directly from Supabase — free, no Vercel Pro needed
+-- ============================================================
+--
+-- Enable the required extensions (run once, may already be enabled):
+--   Dashboard → Database → Extensions → enable "pg_cron" and "pg_net"
+--
+-- Then run this block to schedule the poll every minute:
+--
+-- SELECT cron.schedule(
+--   'mailrelay-poll',
+--   '* * * * *',
+--   $$
+--     SELECT net.http_get(
+--       url := 'https://YOUR_VERCEL_APP.vercel.app/api/poll-gmail?secret=mailrelay_cron_secret_2024'
+--     );
+--   $$
+-- );
+--
+-- To check it is running:
+--   SELECT * FROM cron.job;
+--
+-- To remove it:
+--   SELECT cron.unschedule('mailrelay-poll');
+--
+-- ============================================================
