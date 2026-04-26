@@ -12,7 +12,6 @@ export async function GET(req: NextRequest) {
 
   const supabase = await createServiceClient()
 
-  // Load all active accounts
   const { data: accounts, error: accErr } = await supabase
     .from('gmail_accounts')
     .select('id, email, app_password_encrypted')
@@ -30,20 +29,23 @@ export async function GET(req: NextRequest) {
     .in('account_id', accountIds)
     .eq('active', true)
 
-  // Load message IDs already forwarded in the last 2 hours (deduplication)
-  const since2h = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString()
+  // Poll window — look back 2 hours
+  const sinceDate = new Date(Date.now() - 2 * 60 * 60 * 1000)
+
+  // Dedup: load every message_id already forwarded since sinceDate
+  // This window MUST match sinceDate so old emails are never re-forwarded
   const { data: recentLogs } = await supabase
     .from('forwarded_log')
     .select('message_id')
     .in('account_id', accountIds)
-    .gte('forwarded_at', since2h)
+    .gte('forwarded_at', sinceDate.toISOString())
     .not('message_id', 'is', null)
 
   const alreadyForwarded = new Set<string>(
     (recentLogs ?? []).map((l: { message_id: string }) => l.message_id).filter(Boolean)
   )
 
-  // Group rules by account
+  // Group rules by account_id
   const rulesByAccount = new Map<string, ReturnType<typeof formatRules>>()
   for (const accountId of accountIds) {
     rulesByAccount.set(
@@ -52,15 +54,10 @@ export async function GET(req: NextRequest) {
     )
   }
 
-  // Poll window: 2 hours back — catches emails even if the cron was delayed
-  // or the user opened the email in Gmail before the poll ran
-  const sinceDate = new Date(Date.now() - 2 * 60 * 60 * 1000)
-
   const now = new Date().toISOString()
   let totalForwarded = 0
   const errors: string[] = []
 
-  // Poll all accounts sequentially to stay within 10s Hobby limit
   for (const account of accounts) {
     const rules = rulesByAccount.get(account.id) ?? []
 
