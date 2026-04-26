@@ -388,7 +388,7 @@ $$;
 --   'mailrelay-poll',
 --   '* * * * *',
 --   $$
---     SELECT net.http_get(
+--     SELECT extensions.http_get(
 --       url := 'https://YOUR_VERCEL_APP.vercel.app/api/poll-gmail?secret=mailrelay_cron_secret_2024'
 --     );
 --   $$
