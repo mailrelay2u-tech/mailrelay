@@ -1,0 +1,10 @@
+// Set env vars before any module imports
+process.env.ENCRYPTION_SECRET = 'test_secret_32chars_padding_here'
+process.env.SMTP_USER = 'test@example.com'
+process.env.SMTP_HOST = 'smtp.example.com'
+process.env.SMTP_PORT = '587'
+process.env.SMTP_PASS = 'testpass'
+process.env.CRON_SECRET = 'test_cron_secret'
+process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://test.supabase.co'
+process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'test_anon_key'
+process.env.SUPABASE_SERVICE_ROLE_KEY = 'test_service_key'

@@ -140,9 +140,7 @@ export async function pollAndForward(
                     </p>
                   </div>
                 `,
-                attachments: raw
-                  ? [{ filename: 'original.eml', content: raw, contentType: 'message/rfc822' }]
-                  : [],
+                attachments: [],
               })
 
               results.push({ subject, from, ruleName: rule.name, recipients: rule.recipients, messageId })
@@ -206,18 +204,16 @@ function decodeBody(part: string): string {
   let body = part.slice(bodyStart).trim()
 
   if (/content-transfer-encoding:\s*quoted-printable/i.test(part)) {
-    // Unfold soft line breaks first, then decode hex sequences
     body = body
-      .replace(/=\r\n/g, '')   // soft line break CRLF
-      .replace(/=\n/g, '')     // soft line break LF
-      .replace(/=([0-9A-Fa-f]{2})/g, (_, hex) =>
-        Buffer.from(hex, 'hex').toString('latin1')
-      )
-    // Re-encode as UTF-8 if the part declares UTF-8 charset
+      .replace(/=\r\n/g, '')      // soft line break CRLF
+      .replace(/=\n/g, '')        // soft line break LF
+      .replace(/=([0-9A-Fa-f]{2})/g, (_, hex) => {
+        const code = parseInt(hex, 16)
+        return String.fromCharCode(code)
+      })
+    // Re-encode latin1 bytes as UTF-8 if charset is UTF-8
     if (/charset\s*=\s*["']?utf-8/i.test(part)) {
-      try {
-        body = Buffer.from(body, 'latin1').toString('utf8')
-      } catch {}
+      try { body = Buffer.from(body, 'latin1').toString('utf8') } catch {}
     }
   }
 
