@@ -136,7 +136,7 @@ export async function pollAndForward(
                       </div>
                     </div>
                     <p style="color:#9ca3af;font-size:11px;text-align:center;margin-top:12px">
-                      Forwarded by <a href="https://mailrelay-jet.vercel.app" style="color:#9ca3af">MailRelay</a> · Original .eml attached · <a href="mailto:${from}" style="color:#9ca3af">Reply to ${from}</a>
+                      Forwarded by <a href="https://mailrelay-jet.vercel.app" style="color:#9ca3af">MailRelay</a> &middot; <a href="mailto:${from}" style="color:#9ca3af">Reply to ${from}</a>
                     </p>
                   </div>
                 `,
