@@ -56,7 +56,7 @@ export async function pollAndForward(
   await client.connect()
   const results: ForwardResult[] = []
 
-  // Poll both INBOX and Spam — Gmail often filters legitimate emails to Spam
+  // Poll INBOX and Spam only — never All Mail (contains sent items which causes loops)
   const folders = ['INBOX', '[Gmail]/Spam']
   // Max emails to process per folder per cycle — prevents timeout on large inboxes
   const BATCH_SIZE = 25
@@ -82,6 +82,9 @@ export async function pollAndForward(
           const messageId = msg.envelope?.messageId || `uid-${msg.uid}`
 
           if (alreadyForwarded.has(messageId)) continue
+
+          // Skip emails sent BY this account (our own forwarded copies)
+          if (from.toLowerCase() === account.email.toLowerCase()) continue
 
           for (const rule of rules) {
             const fromMatch = !rule.from_filter ||

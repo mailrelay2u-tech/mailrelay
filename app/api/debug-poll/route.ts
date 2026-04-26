@@ -65,14 +65,8 @@ export async function GET(req: NextRequest) {
         const mailboxes = mailboxList.map((mb: { path: string }) => mb.path)
         accountReport.available_folders = mailboxes
 
-        // Check these folders in order — stop when we find emails
-        const foldersToCheck = [
-          'INBOX',
-          '[Gmail]/All Mail',
-          '[Gmail]/Spam',
-          'All Mail',
-          'Spam',
-        ].filter(f => mailboxes.includes(f))
+        // Check INBOX and Spam only — All Mail contains sent items and causes loops
+        const foldersToCheck = ['INBOX', '[Gmail]/Spam'].filter(f => mailboxes.includes(f))
 
         accountReport.folders_checked = foldersToCheck
 
