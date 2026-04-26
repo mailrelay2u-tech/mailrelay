@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
-import { pollAndForward } from '@/lib/gmail'
 
+// Orchestrator — runs in <2s, just fans out to per-account workers
+// Each worker (poll-account) gets its own full 10s Vercel function budget
 export const maxDuration = 10
 
 export async function GET(req: NextRequest) {
@@ -12,119 +13,35 @@ export async function GET(req: NextRequest) {
 
   const supabase = await createServiceClient()
 
-  const { data: accounts, error: accErr } = await supabase
+  const { data: accounts, error } = await supabase
     .from('gmail_accounts')
-    .select('id, email, app_password_encrypted')
+    .select('id, email')
     .eq('active', true)
 
-  if (accErr) return NextResponse.json({ error: accErr.message }, { status: 500 })
-  if (!accounts?.length) return NextResponse.json({ ok: true, polled: 0, forwarded: 0 })
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (!accounts?.length) return NextResponse.json({ ok: true, dispatched: 0 })
 
-  const accountIds = accounts.map(a => a.id)
+  // Build the base URL from the incoming request so it works on any domain
+  // (localhost in dev, mailrelay-jet.vercel.app in prod)
+  const base = `${req.nextUrl.protocol}//${req.nextUrl.host}`
 
-  // Load active rules with recipients
-  const { data: allRules } = await supabase
-    .from('rules')
-    .select('id, name, from_filter, subject_filter, account_id, rule_recipients(recipients(email))')
-    .in('account_id', accountIds)
-    .eq('active', true)
+  // Fire all per-account workers in parallel — do NOT await them
+  // Each runs independently in its own Vercel function invocation
+  accounts.forEach(account => {
+    fetch(
+      `${base}/api/poll-account?secret=${process.env.CRON_SECRET}&account_id=${account.id}`,
+      { method: 'GET' }
+    ).catch(() => {}) // fire-and-forget — errors handled inside poll-account
+  })
 
-  // Poll window: 30 minutes back (cron runs every minute, 30min is generous buffer)
-  const sinceDate = new Date(Date.now() - 30 * 60 * 1000)
-
-  // Dedup window: 7 days — wide enough to cover any email in the sinceDate window
-  const since7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
-  const { data: recentLogs } = await supabase
-    .from('forwarded_log')
-    .select('message_id')
-    .in('account_id', accountIds)
-    .gte('forwarded_at', since7d.toISOString())
-    .not('message_id', 'is', null)
-
-  const alreadyForwarded = new Set<string>(
-    (recentLogs ?? []).map((l: { message_id: string }) => l.message_id).filter(Boolean)
-  )
-
-  // Group rules by account_id
-  const rulesByAccount = new Map<string, ReturnType<typeof formatRules>>()
-  for (const accountId of accountIds) {
-    rulesByAccount.set(
-      accountId,
-      formatRules((allRules ?? []).filter((r: Record<string, unknown>) => r.account_id === accountId))
-    )
-  }
-
-  const now = new Date().toISOString()
-  let totalForwarded = 0
-  const errors: string[] = []
-
-  for (const account of accounts) {
-    const rules = rulesByAccount.get(account.id) ?? []
-
-    try {
-      const results = await pollAndForward(account, rules, sinceDate, alreadyForwarded)
-
-      if (results.length > 0) {
-        // ON CONFLICT DO NOTHING — if unique constraint fires, silently skip
-        // This prevents errors when the same message_id appears twice
-        const { error: insertErr } = await supabase.from('forwarded_log').insert(
-          results.map(r => ({
-            account_id: account.id,
-            subject: r.subject,
-            from_address: r.from,
-            forwarded_to: r.recipients,
-            rule_matched: r.ruleName,
-            message_id: r.messageId,
-          }))
-        ).select()
-
-        // Log insert errors but don't fail the whole poll
-        if (insertErr) errors.push(`log insert: ${insertErr.message}`)
-        else totalForwarded += results.length
-      }
-
-      await supabase.from('gmail_accounts').update({
-        last_polled_at: now,
-        last_poll_status: 'ok',
-      }).eq('id', account.id)
-
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err)
-      errors.push(`${account.email}: ${msg}`)
-
-      const status =
-        msg.includes('AUTHENTICATIONFAILED') ||
-        msg.includes('Invalid credentials') ||
-        msg.includes('auth') ||
-        msg.includes('LOGIN')
-          ? 'auth_error'
-          : 'imap_error'
-
-      await supabase.from('gmail_accounts').update({
-        last_polled_at: now,
-        last_poll_status: status,
-      }).eq('id', account.id)
-    }
-  }
-
-  await supabase.from('app_state').upsert({ key: 'last_checked', value: now })
+  await supabase.from('app_state').upsert({
+    key: 'last_checked',
+    value: new Date().toISOString(),
+  })
 
   return NextResponse.json({
     ok: true,
-    polled: accounts.length,
-    forwarded: totalForwarded,
-    errors: errors.length ? errors : undefined,
+    dispatched: accounts.length,
+    accounts: accounts.map(a => a.email),
   })
-}
-
-function formatRules(rules: Record<string, unknown>[]) {
-  return rules.map(r => ({
-    id: r.id as string,
-    name: r.name as string,
-    from_filter: r.from_filter as string | null,
-    subject_filter: r.subject_filter as string | null,
-    recipients: ((r.rule_recipients as Array<{ recipients: { email: string } }>) ?? [])
-      .map(rr => rr.recipients?.email)
-      .filter(Boolean) as string[],
-  }))
 }

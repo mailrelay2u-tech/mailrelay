@@ -48,9 +48,8 @@ export async function pollAndForward(
     secure: true,
     auth: { user: account.email, pass: password },
     logger: false,
-    // Shorter timeouts so we fail fast on bad credentials
-    socketTimeout: 5000,
-    greetingTimeout: 5000,
+    socketTimeout: 4000,
+    greetingTimeout: 4000,
   })
 
   await client.connect()
