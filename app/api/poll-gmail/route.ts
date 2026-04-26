@@ -29,16 +29,17 @@ export async function GET(req: NextRequest) {
     .in('account_id', accountIds)
     .eq('active', true)
 
-  // Poll window — look back 2 hours
+  // Poll window: 2 hours back
   const sinceDate = new Date(Date.now() - 2 * 60 * 60 * 1000)
 
-  // Dedup: load every message_id already forwarded since sinceDate
-  // This window MUST match sinceDate so old emails are never re-forwarded
+  // Dedup window: 24 hours — much wider than sinceDate so ALL recently
+  // forwarded message_ids are known before we even open IMAP
+  const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000)
   const { data: recentLogs } = await supabase
     .from('forwarded_log')
     .select('message_id')
     .in('account_id', accountIds)
-    .gte('forwarded_at', sinceDate.toISOString())
+    .gte('forwarded_at', since24h.toISOString())
     .not('message_id', 'is', null)
 
   const alreadyForwarded = new Set<string>(
@@ -65,7 +66,9 @@ export async function GET(req: NextRequest) {
       const results = await pollAndForward(account, rules, sinceDate, alreadyForwarded)
 
       if (results.length > 0) {
-        await supabase.from('forwarded_log').insert(
+        // ON CONFLICT DO NOTHING — if unique constraint fires, silently skip
+        // This prevents errors when the same message_id appears twice
+        const { error: insertErr } = await supabase.from('forwarded_log').insert(
           results.map(r => ({
             account_id: account.id,
             subject: r.subject,
@@ -74,8 +77,11 @@ export async function GET(req: NextRequest) {
             rule_matched: r.ruleName,
             message_id: r.messageId,
           }))
-        )
-        totalForwarded += results.length
+        ).select()
+
+        // Log insert errors but don't fail the whole poll
+        if (insertErr) errors.push(`log insert: ${insertErr.message}`)
+        else totalForwarded += results.length
       }
 
       await supabase.from('gmail_accounts').update({
