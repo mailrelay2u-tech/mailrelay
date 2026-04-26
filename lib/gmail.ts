@@ -104,19 +104,28 @@ export async function pollAndForward(
               await transporter.sendMail({
                 from: `MailRelay <${process.env.SMTP_USER}>`,
                 to: rule.recipients,
+                replyTo: from,
                 subject: `[Fwd] ${subject}`,
+                headers: {
+                  'X-Forwarded-From': from,
+                  'X-Forwarded-By': 'MailRelay',
+                  'X-Original-Subject': subject,
+                },
                 html: `
                   <div style="font-family:sans-serif;max-width:680px;margin:0 auto">
-                    <div style="background:#4B6BF1;padding:12px 20px;border-radius:8px 8px 0 0">
-                      <span style="color:white;font-weight:bold;font-size:15px">MailRelay</span>
-                      <span style="color:#c7d2fe;font-size:13px;margin-left:8px">Forwarded Email</span>
+                    <div style="background:#4B6BF1;padding:12px 20px;border-radius:8px 8px 0 0;display:flex;align-items:center;justify-content:space-between">
+                      <div>
+                        <span style="color:white;font-weight:bold;font-size:15px">MailRelay</span>
+                        <span style="color:#c7d2fe;font-size:13px;margin-left:8px">Forwarded Email</span>
+                      </div>
+                      <a href="mailto:${from}" style="color:#c7d2fe;font-size:12px;text-decoration:none;border:1px solid rgba(255,255,255,0.3);padding:4px 10px;border-radius:6px">Reply to sender</a>
                     </div>
                     <div style="border:1px solid #e5e7eb;border-top:none;border-radius:0 0 8px 8px;padding:20px">
-                      <table style="width:100%;border-collapse:collapse;margin-bottom:16px;font-size:13px">
-                        <tr><td style="color:#6b7280;padding:3px 0;width:80px">From</td><td style="color:#111827;font-weight:500">${from}</td></tr>
-                        <tr><td style="color:#6b7280;padding:3px 0">Subject</td><td style="color:#111827;font-weight:500">${subject}</td></tr>
-                        <tr><td style="color:#6b7280;padding:3px 0">Rule</td><td style="color:#4B6BF1">${rule.name}</td></tr>
-                        <tr><td style="color:#6b7280;padding:3px 0">To</td><td style="color:#111827">${rule.recipients.join(', ')}</td></tr>
+                      <table style="width:100%;border-collapse:collapse;margin-bottom:16px;font-size:13px;background:#f9fafb;border-radius:8px;padding:12px">
+                        <tr><td style="color:#6b7280;padding:4px 8px;width:80px">From</td><td style="color:#111827;font-weight:600;padding:4px 8px">${from}</td></tr>
+                        <tr><td style="color:#6b7280;padding:4px 8px">Subject</td><td style="color:#111827;font-weight:600;padding:4px 8px">${subject}</td></tr>
+                        <tr><td style="color:#6b7280;padding:4px 8px">Via rule</td><td style="color:#4B6BF1;padding:4px 8px">${rule.name}</td></tr>
+                        <tr><td style="color:#6b7280;padding:4px 8px">To</td><td style="color:#111827;padding:4px 8px">${rule.recipients.join(', ')}</td></tr>
                       </table>
                       <hr style="border:none;border-top:1px solid #e5e7eb;margin:16px 0"/>
                       <div style="font-size:14px;color:#374151;line-height:1.6">
@@ -124,7 +133,7 @@ export async function pollAndForward(
                       </div>
                     </div>
                     <p style="color:#9ca3af;font-size:11px;text-align:center;margin-top:12px">
-                      Forwarded by MailRelay · Original .eml attached
+                      Forwarded by <a href="https://mailrelay-jet.vercel.app" style="color:#9ca3af">MailRelay</a> · Original .eml attached · <a href="mailto:${from}" style="color:#9ca3af">Reply to ${from}</a>
                     </p>
                   </div>
                 `,
