@@ -19,7 +19,7 @@ body {
   font-family: var(--font-dm-sans), sans-serif;
 }
 
-/* Slide-in animation for toasts */
+/* Toast slide-in animation */
 @keyframes slide-in-from-bottom-2 {
   from { transform: translateY(8px); opacity: 0; }
   to   { transform: translateY(0);   opacity: 1; }
@@ -32,15 +32,3 @@ body {
 .slide-in-from-bottom-2 { animation-name: slide-in-from-bottom-2; }
 .fade-in { animation-name: fade-in; }
 .duration-200 { animation-duration: 200ms; }
-
-/* Smooth dark mode transitions */
-*, *::before, *::after {
-  transition-property: background-color, border-color, color;
-  transition-duration: 150ms;
-  transition-timing-function: ease;
-}
-/* But NOT layout/transform transitions (would break animations) */
-button, a, input, select, textarea {
-  transition-property: background-color, border-color, color, box-shadow, opacity;
-  transition-duration: 150ms;
-}

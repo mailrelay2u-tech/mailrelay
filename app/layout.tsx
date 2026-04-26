@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import { Sora, DM_Sans } from 'next/font/google'
 import { ToastProvider } from '@/lib/hooks/useToast'
+import TopProgressBar from '@/components/TopProgressBar'
 import './globals.css'
 
 const sora = Sora({ subsets: ['latin'], variable: '--font-sora' })
@@ -15,7 +16,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className={`${sora.variable} ${dmSans.variable} h-full`} suppressHydrationWarning>
       <head>
-        {/* Prevent dark mode flash */}
         <script dangerouslySetInnerHTML={{ __html: `
           try {
             const t = localStorage.getItem('theme')
@@ -26,7 +26,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         `}} />
       </head>
       <body className="h-full bg-gray-50 dark:bg-gray-950 font-body antialiased">
-        <ToastProvider>{children}</ToastProvider>
+        <ToastProvider>
+          <TopProgressBar />
+          {children}
+        </ToastProvider>
       </body>
     </html>
   )

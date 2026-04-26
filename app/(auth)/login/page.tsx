@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { Input, Btn } from '@/components/ui'
+import PageLoader from '@/components/PageLoader'
 
 export default function LoginPage() {
   const router = useRouter()
@@ -12,6 +13,7 @@ export default function LoginPage() {
   const [showPass, setShowPass] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [redirecting, setRedirecting] = useState(false)
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -19,9 +21,12 @@ export default function LoginPage() {
     const supabase = createClient()
     const { error } = await supabase.auth.signInWithPassword({ email, password })
     if (error) { setError(error.message); setLoading(false); return }
+    setRedirecting(true)
     router.push('/dashboard')
     router.refresh()
   }
+
+  if (redirecting) return <PageLoader message="Signing you in…" />
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-950 px-4">
@@ -40,13 +45,13 @@ export default function LoginPage() {
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Email</label>
               <Input type="email" required value={email} onChange={e => setEmail(e.target.value)}
-                placeholder="you@example.com" autoComplete="email" />
+                placeholder="you@example.com" autoComplete="email" disabled={loading} />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Password</label>
               <div className="relative">
                 <Input type={showPass ? 'text' : 'password'} required value={password}
-                  onChange={e => setPassword(e.target.value)} autoComplete="current-password" />
+                  onChange={e => setPassword(e.target.value)} autoComplete="current-password" disabled={loading} />
                 <button type="button" onClick={() => setShowPass(s => !s)}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
                   {showPass ? (
@@ -79,7 +84,7 @@ export default function LoginPage() {
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
                   </svg>
-                  Signing in…
+                  Verifying…
                 </span>
               ) : 'Sign in'}
             </Btn>

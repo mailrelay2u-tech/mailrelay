@@ -25,17 +25,20 @@ export interface ForwardResult {
 }
 
 /**
- * Opens an IMAP IDLE connection for `idleMs` milliseconds.
- * Any new unseen message that arrives during that window is immediately
- * matched against rules and forwarded. Returns all forwarded results.
+ * Connect to Gmail IMAP, fetch all messages since `sinceDate`,
+ * match against rules, forward matches via SMTP.
  *
- * On Vercel (60s max function duration) call with idleMs = 55_000.
- * Locally or on a long-running server you can pass a larger value.
+ * Uses INTERNALDATE (server receive time) not the Seen flag —
+ * so it works even if the user has already read the email in Gmail.
+ *
+ * Deduplication is handled by the caller via already-forwarded Message-IDs
+ * stored in the database (passed in as `alreadyForwarded`).
  */
-export async function idleAndForward(
+export async function pollAndForward(
   account: GmailAccount,
   rules: Rule[],
-  idleMs = 55_000
+  sinceDate: Date,
+  alreadyForwarded: Set<string>
 ): Promise<ForwardResult[]> {
   const password = decrypt(account.app_password_encrypted)
 
@@ -45,59 +48,96 @@ export async function idleAndForward(
     secure: true,
     auth: { user: account.email, pass: password },
     logger: false,
+    // Shorter timeouts so we fail fast on bad credentials
+    socketTimeout: 5000,
+    greetingTimeout: 5000,
   })
 
   await client.connect()
   const results: ForwardResult[] = []
 
+  // Poll both INBOX and Spam — Gmail often filters legitimate emails to Spam
+  const folders = ['INBOX', '[Gmail]/Spam']
+
   try {
-    const lock = await client.getMailboxLock('INBOX')
-    try {
-      // --- Step 1: catch up on any unseen mail since last check ---
-      // This handles emails that arrived between cron invocations
-      const catchUpSince = new Date(Date.now() - 90_000) // 90s back covers the 1-min cron gap + buffer
-      await processUnseen(client, rules, results, catchUpSince)
+    for (const folder of folders) {
+      // getMailboxLock throws if folder doesn't exist — skip gracefully
+      let lock
+      try { lock = await client.getMailboxLock(folder) } catch { continue }
 
-      // --- Step 2: IDLE — wait for server PUSH notifications ---
-      // Gmail will push EXISTS/RECENT when new mail arrives
-      const idleStart = Date.now()
-      let idleHandle: ReturnType<typeof client.idle> | null = null
+      try {
+        const uids = await client.search({ since: sinceDate }, { uid: true })
+        const uidList = Array.isArray(uids) ? uids : []
+        if (!uidList.length) continue
 
-      await new Promise<void>((resolve) => {
-        // Set a hard timeout to exit IDLE before Vercel kills the function
-        const timeout = setTimeout(() => {
-          resolve()
-        }, idleMs)
+        const messages = client.fetch(uidList, { envelope: true, source: true }, { uid: true })
 
-        // Listen for new mail notifications from the server
-        client.on('exists', async () => {
-          // New mail arrived — process it immediately
-          await processUnseen(client, rules, results, new Date(idleStart))
-        })
+        for await (const msg of messages) {
+          const subject = msg.envelope?.subject || ''
+          const from = msg.envelope?.from?.[0]?.address || ''
+          const messageId = msg.envelope?.messageId || `uid-${msg.uid}`
 
-        // Start IDLE
-        idleHandle = client.idle()
-        idleHandle.catch(() => {}) // suppress unhandled rejection if we stop early
+          if (alreadyForwarded.has(messageId)) continue
 
-        // If IDLE ends on its own (server timeout ~29min), resolve
-        if (idleHandle) {
-          Promise.resolve(idleHandle).then(() => {
-            clearTimeout(timeout)
-            resolve()
-          }).catch(() => {
-            clearTimeout(timeout)
-            resolve()
-          })
+          for (const rule of rules) {
+            const fromMatch = !rule.from_filter ||
+              from.toLowerCase().includes(rule.from_filter.toLowerCase())
+            const subjectMatch = !rule.subject_filter ||
+              subject.toLowerCase().includes(rule.subject_filter.toLowerCase())
+
+            if (fromMatch && subjectMatch && rule.recipients.length > 0) {
+              const raw = msg.source?.toString() ?? ''
+              const bodyHtml = extractHtmlBody(raw)
+              const bodyText = extractPlainBody(raw)
+
+              // Use HTML body as-is if present (already valid HTML)
+              // For plain text, wrap in <pre> but do NOT double-escape —
+              // the text is already decoded from quoted-printable/base64
+              const bodyContent = bodyHtml
+                ? bodyHtml
+                : `<pre style="white-space:pre-wrap;font-family:inherit;margin:0">${escapeHtml(bodyText)}</pre>`
+
+              await transporter.sendMail({
+                from: `MailRelay <${process.env.SMTP_USER}>`,
+                to: rule.recipients,
+                subject: `[Fwd] ${subject}`,
+                html: `
+                  <div style="font-family:sans-serif;max-width:680px;margin:0 auto">
+                    <div style="background:#4B6BF1;padding:12px 20px;border-radius:8px 8px 0 0">
+                      <span style="color:white;font-weight:bold;font-size:15px">MailRelay</span>
+                      <span style="color:#c7d2fe;font-size:13px;margin-left:8px">Forwarded Email</span>
+                    </div>
+                    <div style="border:1px solid #e5e7eb;border-top:none;border-radius:0 0 8px 8px;padding:20px">
+                      <table style="width:100%;border-collapse:collapse;margin-bottom:16px;font-size:13px">
+                        <tr><td style="color:#6b7280;padding:3px 0;width:80px">From</td><td style="color:#111827;font-weight:500">${from}</td></tr>
+                        <tr><td style="color:#6b7280;padding:3px 0">Subject</td><td style="color:#111827;font-weight:500">${subject}</td></tr>
+                        <tr><td style="color:#6b7280;padding:3px 0">Rule</td><td style="color:#4B6BF1">${rule.name}</td></tr>
+                        <tr><td style="color:#6b7280;padding:3px 0">To</td><td style="color:#111827">${rule.recipients.join(', ')}</td></tr>
+                      </table>
+                      <hr style="border:none;border-top:1px solid #e5e7eb;margin:16px 0"/>
+                      <div style="font-size:14px;color:#374151;line-height:1.6">
+                        ${bodyContent}
+                      </div>
+                    </div>
+                    <p style="color:#9ca3af;font-size:11px;text-align:center;margin-top:12px">
+                      Forwarded by MailRelay · Original .eml attached
+                    </p>
+                  </div>
+                `,
+                attachments: raw
+                  ? [{ filename: 'original.eml', content: raw, contentType: 'message/rfc822' }]
+                  : [],
+              })
+
+              results.push({ subject, from, ruleName: rule.name, recipients: rule.recipients, messageId })
+              alreadyForwarded.add(messageId)
+              break
+            }
+          }
         }
-      })
-
-      // Stop IDLE cleanly
-      if (idleHandle) {
-        try { await (idleHandle as unknown as { stop: () => void }).stop?.() } catch {}
+      } finally {
+        lock.release()
       }
-
-    } finally {
-      lock.release()
     }
   } finally {
     try { await client.logout() } catch {}
@@ -106,68 +146,76 @@ export async function idleAndForward(
   return results
 }
 
-/**
- * Fetch all unseen messages since `since`, match rules, forward matches.
- * Deduplicates by Message-ID so the same email is never forwarded twice.
- */
-async function processUnseen(
-  client: ImapFlow,
-  rules: Rule[],
-  results: ForwardResult[],
-  since: Date
-) {
-  const seenIds = new Set(results.map(r => r.messageId))
+// Keep old export name for any other callers
+export const idleAndForward = pollAndForward
 
-  const messages = client.fetch(
-    { since, seen: false },
-    { envelope: true, source: true, headers: ['message-id'] }
-  )
+// ---------------------------------------------------------------------------
+// Body extraction helpers
+// ---------------------------------------------------------------------------
 
-  for await (const msg of messages) {
-    const subject = msg.envelope?.subject || ''
-    const from = msg.envelope?.from?.[0]?.address || ''
-    const messageId = msg.envelope?.messageId || `${msg.uid}`
-
-    // Skip if already forwarded in this session
-    if (seenIds.has(messageId)) continue
-
-    for (const rule of rules) {
-      const fromMatch = !rule.from_filter ||
-        from.toLowerCase().includes(rule.from_filter.toLowerCase())
-      const subjectMatch = !rule.subject_filter ||
-        subject.toLowerCase().includes(rule.subject_filter.toLowerCase())
-
-      if (fromMatch && subjectMatch && rule.recipients.length > 0) {
-        const raw = msg.source?.toString() ?? ''
-
-        await transporter.sendMail({
-          from: `MailRelay <${process.env.SMTP_USER}>`,
-          to: rule.recipients,
-          subject: `[Fwd] ${subject}`,
-          html: `
-            <p style="color:#666;font-size:13px;border-left:3px solid #4B6BF1;padding-left:10px;margin-bottom:16px">
-              Forwarded by <strong>MailRelay</strong> · Rule: <em>${rule.name}</em><br/>
-              Original sender: <strong>${from}</strong>
-            </p>
-          `,
-          attachments: [{ filename: 'original.eml', content: raw }],
-        })
-
-        results.push({ subject, from, ruleName: rule.name, recipients: rule.recipients, messageId })
-        seenIds.add(messageId)
-        break // first matching rule wins
-      }
+function extractPlainBody(raw: string): string {
+  if (!raw) return ''
+  const boundaryMatch = raw.match(/boundary="?([^"\r\n;]+)"?/i)
+  if (boundaryMatch) {
+    const boundary = boundaryMatch[1].trim()
+    const parts = raw.split(new RegExp(`--${escapeRegex(boundary)}(?:--)?`))
+    for (const part of parts) {
+      if (/content-type:\s*text\/plain/i.test(part)) return decodeBody(part)
     }
   }
+  const blankLine = raw.indexOf('\r\n\r\n')
+  if (blankLine !== -1) return raw.slice(blankLine + 4).trim()
+  const blankLineN = raw.indexOf('\n\n')
+  if (blankLineN !== -1) return raw.slice(blankLineN + 2).trim()
+  return raw
 }
 
-/**
- * Legacy poll fallback — used when IDLE is not needed (e.g. testing).
- * Kept for backward compatibility with the cron route.
- */
-export async function pollAccount(
-  account: GmailAccount,
-  rules: Rule[]
-): Promise<ForwardResult[]> {
-  return idleAndForward(account, rules, 0) // 0ms IDLE = catch-up only, no wait
+function extractHtmlBody(raw: string): string {
+  if (!raw) return ''
+  const boundaryMatch = raw.match(/boundary="?([^"\r\n;]+)"?/i)
+  if (boundaryMatch) {
+    const boundary = boundaryMatch[1].trim()
+    const parts = raw.split(new RegExp(`--${escapeRegex(boundary)}(?:--)?`))
+    for (const part of parts) {
+      if (/content-type:\s*text\/html/i.test(part)) return decodeBody(part)
+    }
+  }
+  return ''
+}
+
+function decodeBody(part: string): string {
+  const blankLine = part.indexOf('\r\n\r\n')
+  const blankLineN = part.indexOf('\n\n')
+  const bodyStart = blankLine !== -1 ? blankLine + 4 : blankLineN !== -1 ? blankLineN + 2 : 0
+  let body = part.slice(bodyStart).trim()
+
+  if (/content-transfer-encoding:\s*quoted-printable/i.test(part)) {
+    // Unfold soft line breaks first, then decode hex sequences
+    body = body
+      .replace(/=\r\n/g, '')   // soft line break CRLF
+      .replace(/=\n/g, '')     // soft line break LF
+      .replace(/=([0-9A-Fa-f]{2})/g, (_, hex) =>
+        Buffer.from(hex, 'hex').toString('latin1')
+      )
+    // Re-encode as UTF-8 if the part declares UTF-8 charset
+    if (/charset\s*=\s*["']?utf-8/i.test(part)) {
+      try {
+        body = Buffer.from(body, 'latin1').toString('utf8')
+      } catch {}
+    }
+  }
+
+  if (/content-transfer-encoding:\s*base64/i.test(part)) {
+    try { body = Buffer.from(body.replace(/\s/g, ''), 'base64').toString('utf8') } catch {}
+  }
+
+  return body
+}
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }

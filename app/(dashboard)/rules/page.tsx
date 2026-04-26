@@ -9,7 +9,8 @@ interface Account { id: string; label: string; email: string }
 interface Rule {
   id: string; name: string; active: boolean
   from_filter: string | null; subject_filter: string | null
-  account_id: string; recipients: Recipient[]
+  account_id: string; account_email: string | null; account_label: string | null
+  recipients: Recipient[]
 }
 
 const emptyForm = { name: '', account_id: '', from_filter: '', subject_filter: '', recipient_ids: [] as string[] }
@@ -151,6 +152,20 @@ export default function RulesPage() {
                   <p className="font-semibold text-gray-900 dark:text-white">{rule.name}</p>
                   <Badge type={rule.active ? 'success' : 'neutral'}>{rule.active ? 'Active' : 'Paused'}</Badge>
                 </div>
+
+                {/* Account this rule watches */}
+                {rule.account_email && (
+                  <div className="flex items-center gap-1.5 mt-1.5">
+                    <svg className="w-3 h-3 text-gray-400 dark:text-gray-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                    </svg>
+                    <span className="text-xs text-gray-500 dark:text-gray-400 font-mono">
+                      {rule.account_label ? `${rule.account_label} (${rule.account_email})` : rule.account_email}
+                    </span>
+                  </div>
+                )}
+
+                {/* Filters */}
                 <div className="flex flex-wrap gap-2 mt-1.5">
                   {rule.from_filter && (
                     <span className="text-xs bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 px-2 py-0.5 rounded-lg font-mono">
@@ -163,6 +178,8 @@ export default function RulesPage() {
                     </span>
                   )}
                 </div>
+
+                {/* Recipients */}
                 <p className="text-xs text-gray-400 dark:text-gray-500 mt-1.5">
                   → {rule.recipients.length > 0 ? rule.recipients.map(r => r.email).join(', ') : 'No recipients assigned'}
                 </p>

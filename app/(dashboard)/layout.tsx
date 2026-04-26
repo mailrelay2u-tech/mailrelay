@@ -16,8 +16,14 @@ export default async function DashboardLayout({ children }: { children: React.Re
   return (
     <div className="flex h-screen overflow-hidden bg-gray-50 dark:bg-gray-950">
       <Sidebar userName={profile?.name ?? user.email ?? ''} userEmail={user.email ?? ''} />
-      <main className="flex-1 overflow-y-auto">
-        <div className="p-4 md:p-6 max-w-6xl mx-auto">{children}</div>
+      {/*
+        pt-14 on mobile = clears the fixed top bar (h-14)
+        md:pt-0 on desktop = sidebar is static, no top bar
+      */}
+      <main className="flex-1 overflow-y-auto pt-14 md:pt-0">
+        <div className="p-4 md:p-6 max-w-6xl mx-auto">
+          {children}
+        </div>
       </main>
     </div>
   )

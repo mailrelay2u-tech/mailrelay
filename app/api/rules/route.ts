@@ -17,6 +17,7 @@ export async function GET(req: NextRequest) {
   let query = supabase
     .from('rules')
     .select(`id, name, active, from_filter, subject_filter, account_id,
+      gmail_accounts(email, label),
       rule_recipients(recipient_id, recipients(id, name, email))`)
     .order('created_at', { ascending: false })
 
@@ -27,6 +28,8 @@ export async function GET(req: NextRequest) {
 
   const rules = (data ?? []).map((r: Record<string, unknown>) => ({
     ...r,
+    account_email: (r.gmail_accounts as { email: string; label: string } | null)?.email ?? null,
+    account_label: (r.gmail_accounts as { email: string; label: string } | null)?.label ?? null,
     recipients: ((r.rule_recipients as Array<{ recipients: unknown }>) ?? []).map((rr) => rr.recipients),
   }))
 

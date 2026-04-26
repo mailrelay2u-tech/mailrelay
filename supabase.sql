@@ -89,6 +89,7 @@ create table forwarded_log (
   from_address text,
   forwarded_to text[],
   rule_matched text,
+  message_id   text,   -- RFC 2822 Message-ID for deduplication
   forwarded_at timestamptz default now()
 );
 
@@ -227,69 +228,139 @@ create trigger on_auth_user_created
 -- ⚠ Run this AFTER the schema above (tables + trigger must exist first)
 -- ============================================================
 
+-- ============================================================
+-- STEP 1: Clean up any broken previous attempt
+-- ============================================================
+DELETE FROM public.profiles
+  WHERE id IN (SELECT id FROM auth.users WHERE email = 'btcmaster657@gmail.com');
+
+DELETE FROM auth.identities
+  WHERE user_id IN (SELECT id FROM auth.users WHERE email = 'btcmaster657@gmail.com');
+
+DELETE FROM auth.users WHERE email = 'btcmaster657@gmail.com';
+
+-- ============================================================
+-- STEP 2: Insert the admin user with ALL required auth columns
+-- ============================================================
 DO $$
 DECLARE
-  v_uid uuid := gen_random_uuid();
+  v_uid  uuid := gen_random_uuid();
+  v_now  timestamptz := now();
 BEGIN
-  -- Only insert if this email doesn't already exist
-  IF NOT EXISTS (
-    SELECT 1 FROM auth.users WHERE email = 'btcmaster657@gmail.com'
-  ) THEN
+  -- Insert into auth.users with every column Supabase Auth needs
+  INSERT INTO auth.users (
+    id,
+    instance_id,
+    aud,
+    role,
+    email,
+    encrypted_password,
+    email_confirmed_at,
+    invited_at,
+    confirmation_token,
+    confirmation_sent_at,
+    recovery_token,
+    recovery_sent_at,
+    email_change_token_new,
+    email_change,
+    email_change_sent_at,
+    last_sign_in_at,
+    raw_app_meta_data,
+    raw_user_meta_data,
+    is_super_admin,
+    created_at,
+    updated_at,
+    phone,
+    phone_confirmed_at,
+    phone_change,
+    phone_change_token,
+    phone_change_sent_at,
+    email_change_token_current,
+    email_change_confirm_status,
+    banned_until,
+    reauthentication_token,
+    reauthentication_sent_at,
+    is_sso_user,
+    deleted_at
+  ) VALUES (
+    v_uid,
+    '00000000-0000-0000-0000-000000000000',
+    'authenticated',
+    'authenticated',
+    'btcmaster657@gmail.com',
+    crypt('Admin@MailRelay2024', gen_salt('bf')),
+    v_now,   -- email already confirmed
+    NULL,
+    '',      -- no pending confirmation
+    NULL,
+    '',      -- no pending recovery
+    NULL,
+    '',
+    '',
+    NULL,
+    NULL,
+    '{"provider": "email", "providers": ["email"]}',
+    '{"name": "Admin"}',
+    FALSE,
+    v_now,
+    v_now,
+    NULL, NULL, '', '', NULL, '', 0, NULL, '', NULL, FALSE, NULL
+  );
 
-    INSERT INTO auth.users (
-      id,
-      instance_id,
-      email,
-      encrypted_password,
-      email_confirmed_at,
-      created_at,
-      updated_at,
-      raw_app_meta_data,
-      raw_user_meta_data,
-      is_super_admin,
-      role,
-      aud
-    ) VALUES (
-      v_uid,
-      '00000000-0000-0000-0000-000000000000',
-      'btcmaster657@gmail.com',
-      -- bcrypt hash of: Admin@MailRelay2024
-      crypt('Admin@MailRelay2024', gen_salt('bf')),
-      now(),           -- email_confirmed_at = now() skips email verification
-      now(),
-      now(),
-      '{"provider":"email","providers":["email"]}',
-      '{"name":"Admin"}',
-      false,
-      'authenticated',
-      'authenticated'
-    );
+  -- Insert the identity record (required for email provider sign-in)
+  INSERT INTO auth.identities (
+    id,
+    user_id,
+    identity_data,
+    provider,
+    last_sign_in_at,
+    created_at,
+    updated_at,
+    provider_id
+  ) VALUES (
+    gen_random_uuid(),
+    v_uid,
+    jsonb_build_object('sub', v_uid::text, 'email', 'btcmaster657@gmail.com'),
+    'email',
+    v_now,
+    v_now,
+    v_now,
+    v_uid::text
+  );
 
-    -- Ensure profile row exists (trigger fires on INSERT but belt-and-suspenders)
-    INSERT INTO public.profiles (id, name, role)
-    VALUES (v_uid, 'Admin', 'admin')
-    ON CONFLICT (id) DO NOTHING;
+  -- Create the profile row
+  INSERT INTO public.profiles (id, name, role)
+  VALUES (v_uid, 'Admin', 'admin')
+  ON CONFLICT (id) DO NOTHING;
 
-    RAISE NOTICE 'Admin user created: btcmaster657@gmail.com (password: Admin@MailRelay2024)';
-  ELSE
-    RAISE NOTICE 'Admin user already exists — skipping insert.';
-  END IF;
+  RAISE NOTICE 'SUCCESS — Admin created. ID: %', v_uid;
 END;
 $$;
 
--- Verify the result:
--- SELECT u.id, u.email, u.email_confirmed_at, p.name, p.role
+-- ============================================================
+-- STEP 3: Verify — run this SELECT to confirm it worked
+-- ============================================================
+-- SELECT
+--   u.id,
+--   u.email,
+--   u.email_confirmed_at IS NOT NULL AS email_confirmed,
+--   u.encrypted_password IS NOT NULL AS has_password,
+--   i.provider,
+--   p.name,
+--   p.role
 -- FROM auth.users u
+-- JOIN auth.identities i ON i.user_id = u.id
 -- JOIN public.profiles p ON p.id = u.id
 -- WHERE u.email = 'btcmaster657@gmail.com';
 --
--- Expected: email_confirmed_at is set, role = admin
+-- All columns should show: email_confirmed=true, has_password=true,
+-- provider=email, role=admin
 --
--- Then go to /login and sign in with:
+-- STEP 4: Sign in at /login
 --   Email:    btcmaster657@gmail.com
 --   Password: Admin@MailRelay2024
 --
--- IMMEDIATELY change your password at /account/security after first login.
+-- STEP 5: Immediately change password at /account/security
 --
 -- ============================================================
 -- FUTURE ADMINS: Invite Flow
