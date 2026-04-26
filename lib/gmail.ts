@@ -55,7 +55,7 @@ export async function idleAndForward(
     try {
       // --- Step 1: catch up on any unseen mail since last check ---
       // This handles emails that arrived between cron invocations
-      const catchUpSince = new Date(Date.now() - 70_000) // 70s back covers the 1-min cron gap
+      const catchUpSince = new Date(Date.now() - 90_000) // 90s back covers the 1-min cron gap + buffer
       await processUnseen(client, rules, results, catchUpSince)
 
       // --- Step 2: IDLE — wait for server PUSH notifications ---

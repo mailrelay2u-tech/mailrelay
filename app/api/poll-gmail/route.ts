@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { idleAndForward } from '@/lib/gmail'
 
-// Tell Vercel to allow up to 60 seconds for this function
-export const maxDuration = 60
+// Vercel Hobby plan max is 10s
+export const maxDuration = 10
 
 export async function GET(req: NextRequest) {
   const secret = req.nextUrl.searchParams.get('secret')
@@ -40,9 +40,9 @@ export async function GET(req: NextRequest) {
     rulesByAccount.set(accountId, formatRules(accountRules))
   }
 
-  // Run all accounts in parallel — each holds IDLE for 55s
-  // 55s leaves 5s buffer before Vercel's 60s limit
-  const IDLE_MS = 55_000
+  // Vercel Hobby: 10s max function duration
+  // 8s IDLE + ~2s for connect/disconnect/DB = safely under 10s
+  const IDLE_MS = 8_000
 
   const accountResults = await Promise.allSettled(
     accounts.map(account =>
