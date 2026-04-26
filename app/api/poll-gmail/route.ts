@@ -29,17 +29,16 @@ export async function GET(req: NextRequest) {
     .in('account_id', accountIds)
     .eq('active', true)
 
-  // Poll window: 2 hours back
-  const sinceDate = new Date(Date.now() - 2 * 60 * 60 * 1000)
+  // Poll window: 30 minutes back (cron runs every minute, 30min is generous buffer)
+  const sinceDate = new Date(Date.now() - 30 * 60 * 1000)
 
-  // Dedup window: 24 hours — much wider than sinceDate so ALL recently
-  // forwarded message_ids are known before we even open IMAP
-  const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000)
+  // Dedup window: 7 days — wide enough to cover any email in the sinceDate window
+  const since7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
   const { data: recentLogs } = await supabase
     .from('forwarded_log')
     .select('message_id')
     .in('account_id', accountIds)
-    .gte('forwarded_at', since24h.toISOString())
+    .gte('forwarded_at', since7d.toISOString())
     .not('message_id', 'is', null)
 
   const alreadyForwarded = new Set<string>(
