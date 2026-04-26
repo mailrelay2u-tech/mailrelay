@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/poll-gmail?secret=mailrelay_cron_secret_2024",
+      "schedule": "* * * * *"
+    }
+  ]
+}
