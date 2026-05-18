@@ -93,12 +93,13 @@ export async function pollAndForward(
 
             if (fromMatch && subjectMatch && rule.recipients.length > 0) {
               const raw = msg.source?.toString() ?? ''
-              const bodyHtml = extractHtmlBody(raw)
-              const bodyText = extractPlainBody(raw)
 
-              // Use HTML body as-is if present (already valid HTML)
-              // For plain text, wrap in <pre> but do NOT double-escape —
-              // the text is already decoded from quoted-printable/base64
+              // Decode the full raw source first, then extract body
+              // This ensures QP/base64 headers are always with their content
+              const { html: bodyHtml, text: bodyText } = getBestBody(raw)
+
+              // bodyHtml is already decoded HTML — inject directly, never escape
+              // bodyText is decoded plain text — escape then wrap in pre
               const bodyContent = bodyHtml
                 ? bodyHtml
                 : `<pre style="white-space:pre-wrap;font-family:inherit;margin:0">${escapeHtml(bodyText)}</pre>`
@@ -166,62 +167,94 @@ export const idleAndForward = pollAndForward
 // Body extraction helpers
 // ---------------------------------------------------------------------------
 
-function extractPlainBody(raw: string): string {
-  if (!raw) return ''
-  const boundaryMatch = raw.match(/boundary="?([^"\r\n;]+)"?/i)
+/**
+ * Fully decode a raw RFC 2822 email source and return the best body:
+ * prefers text/html, falls back to text/plain.
+ * Handles multipart/alternative, multipart/mixed, and single-part.
+ */
+function getBestBody(raw: string): { html: string; text: string } {
+  if (!raw) return { html: '', text: '' }
+
+  // Decode the entire raw source as one QP pass first
+  // (handles single-part emails that are QP-encoded at the top level)
+  const topEncoding = getHeader(raw, 'content-transfer-encoding')
+  const topType = getHeader(raw, 'content-type')
+
+  // Find the boundary for multipart
+  const boundaryMatch = raw.match(/boundary=\s*"?([^"\r\n;]+)"?/i)
+
   if (boundaryMatch) {
     const boundary = boundaryMatch[1].trim()
-    const parts = raw.split(new RegExp(`--${escapeRegex(boundary)}(?:--)?`))
+    const parts = raw.split(new RegExp(`--${escapeRegex(boundary)}(?:--|\r?\n|$)`))
+
+    let htmlPart = ''
+    let textPart = ''
+
     for (const part of parts) {
-      if (/content-type:\s*text\/plain/i.test(part)) return decodeBody(part)
+      const ct = getHeader(part, 'content-type')
+      if (!ct) continue
+
+      // Recurse into nested multipart
+      if (ct.includes('multipart/')) {
+        const nested = getBestBody(part)
+        if (nested.html && !htmlPart) htmlPart = nested.html
+        if (nested.text && !textPart) textPart = nested.text
+        continue
+      }
+
+      if (ct.includes('text/html') && !htmlPart) {
+        htmlPart = decodeBodyPart(part)
+      } else if (ct.includes('text/plain') && !textPart) {
+        textPart = decodeBodyPart(part)
+      }
     }
+
+    return { html: htmlPart, text: textPart }
   }
-  const blankLine = raw.indexOf('\r\n\r\n')
-  if (blankLine !== -1) return raw.slice(blankLine + 4).trim()
-  const blankLineN = raw.indexOf('\n\n')
-  if (blankLineN !== -1) return raw.slice(blankLineN + 2).trim()
-  return raw
+
+  // Single-part email
+  if (topType?.includes('text/html')) {
+    return { html: decodeBodyPart(raw), text: '' }
+  }
+  return { html: '', text: decodeBodyPart(raw) }
 }
 
-function extractHtmlBody(raw: string): string {
-  if (!raw) return ''
-  const boundaryMatch = raw.match(/boundary="?([^"\r\n;]+)"?/i)
-  if (boundaryMatch) {
-    const boundary = boundaryMatch[1].trim()
-    const parts = raw.split(new RegExp(`--${escapeRegex(boundary)}(?:--)?`))
-    for (const part of parts) {
-      if (/content-type:\s*text\/html/i.test(part)) return decodeBody(part)
-    }
-  }
-  return ''
+/** Extract a header value from a part string */
+function getHeader(part: string, name: string): string {
+  const match = part.match(new RegExp(`^${name}:\s*([^\r\n]+)`, 'im'))
+  return match ? match[1].trim().toLowerCase() : ''
 }
 
-function decodeBody(part: string): string {
-  const blankLine = part.indexOf('\r\n\r\n')
-  const blankLineN = part.indexOf('\n\n')
-  const bodyStart = blankLine !== -1 ? blankLine + 4 : blankLineN !== -1 ? blankLineN + 2 : 0
+/** Decode a single MIME part — strips headers, decodes QP or base64 */
+function decodeBodyPart(part: string): string {
+  // Find blank line separating headers from body
+  const crlfIdx = part.indexOf('\r\n\r\n')
+  const lfIdx = part.indexOf('\n\n')
+  const bodyStart = crlfIdx !== -1 ? crlfIdx + 4 : lfIdx !== -1 ? lfIdx + 2 : 0
+  const headers = part.slice(0, bodyStart)
   let body = part.slice(bodyStart).trim()
 
-  if (/content-transfer-encoding:\s*quoted-printable/i.test(part)) {
+  const enc = (headers.match(/content-transfer-encoding:\s*([^\r\n]+)/i)?.[1] ?? '').trim().toLowerCase()
+  const charset = (headers.match(/charset\s*=\s*["']?([^"'\s;]+)/i)?.[1] ?? 'utf-8').toLowerCase()
+
+  if (enc === 'quoted-printable') {
     body = body
-      .replace(/=\r\n/g, '')      // soft line break CRLF
-      .replace(/=\n/g, '')        // soft line break LF
-      .replace(/=([0-9A-Fa-f]{2})/g, (_, hex) => {
-        const code = parseInt(hex, 16)
-        return String.fromCharCode(code)
-      })
-    // Re-encode latin1 bytes as UTF-8 if charset is UTF-8
-    if (/charset\s*=\s*["']?utf-8/i.test(part)) {
+      .replace(/=\r\n/g, '')
+      .replace(/=\n/g, '')
+      .replace(/=([0-9A-Fa-f]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+    if (charset === 'utf-8') {
       try { body = Buffer.from(body, 'latin1').toString('utf8') } catch {}
     }
-  }
-
-  if (/content-transfer-encoding:\s*base64/i.test(part)) {
+  } else if (enc === 'base64') {
     try { body = Buffer.from(body.replace(/\s/g, ''), 'base64').toString('utf8') } catch {}
   }
 
   return body
 }
+
+// Keep old names for backward compat
+function extractPlainBody(raw: string): string { return getBestBody(raw).text }
+function extractHtmlBody(raw: string): string { return getBestBody(raw).html }
 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
