@@ -220,7 +220,8 @@ function getBestBody(raw: string, depth = 0): { html: string; text: string } {
 
 /** Extract a header value from a part string */
 function getHeader(part: string, name: string): string {
-  const match = part.match(new RegExp(`^${name}:\s*([^\r\n]+)`, 'im'))
+  // Use \b word boundary and no ^ anchor — part may start with \r\n after boundary split
+  const match = part.match(new RegExp(`(?:^|\r?\n)${name}:\s*([^\r\n]+)`, 'i'))
   return match ? match[1].trim().toLowerCase() : ''
 }
 
