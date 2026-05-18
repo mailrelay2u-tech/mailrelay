@@ -119,6 +119,8 @@ export async function pollAndForward(
                   'X-Forwarded-By': 'MailRelay',
                   'X-Original-Subject': subject,
                 },
+                // Use 8bit encoding to preserve Unicode without QP re-encoding
+                textEncoding: '8bit',
                 html: `
                   <div style="font-family:sans-serif;max-width:680px;margin:0 auto">
                     <div style="background:#4B6BF1;padding:12px 20px;border-radius:8px 8px 0 0;display:flex;align-items:center;justify-content:space-between">
