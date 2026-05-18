@@ -172,20 +172,18 @@ export const idleAndForward = pollAndForward
  * prefers text/html, falls back to text/plain.
  * Handles multipart/alternative, multipart/mixed, and single-part.
  */
-function getBestBody(raw: string): { html: string; text: string } {
-  if (!raw) return { html: '', text: '' }
+function getBestBody(raw: string, depth = 0): { html: string; text: string } {
+  if (!raw || depth > 5) return { html: '', text: '' }
 
-  // Decode the entire raw source as one QP pass first
-  // (handles single-part emails that are QP-encoded at the top level)
-  const topEncoding = getHeader(raw, 'content-transfer-encoding')
-  const topType = getHeader(raw, 'content-type')
-
-  // Find the boundary for multipart
   const boundaryMatch = raw.match(/boundary=\s*"?([^"\r\n;]+)"?/i)
 
   if (boundaryMatch) {
     const boundary = boundaryMatch[1].trim()
-    const parts = raw.split(new RegExp(`--${escapeRegex(boundary)}(?:--|\r?\n|$)`))
+    // Split on --boundary lines, filter out empty parts and the closing --boundary--
+    const parts = raw
+      .split(new RegExp(`\r?\n--${escapeRegex(boundary)}`))
+      .slice(1) // first element is the preamble before first boundary
+      .filter(p => !p.startsWith('--')) // remove closing boundary
 
     let htmlPart = ''
     let textPart = ''
@@ -194,9 +192,9 @@ function getBestBody(raw: string): { html: string; text: string } {
       const ct = getHeader(part, 'content-type')
       if (!ct) continue
 
-      // Recurse into nested multipart
-      if (ct.includes('multipart/')) {
-        const nested = getBestBody(part)
+      // Only recurse if this part itself has a boundary (truly nested multipart)
+      if (ct.includes('multipart/') && /boundary=/i.test(part)) {
+        const nested = getBestBody(part, depth + 1)
         if (nested.html && !htmlPart) htmlPart = nested.html
         if (nested.text && !textPart) textPart = nested.text
         continue
@@ -212,8 +210,9 @@ function getBestBody(raw: string): { html: string; text: string } {
     return { html: htmlPart, text: textPart }
   }
 
-  // Single-part email
-  if (topType?.includes('text/html')) {
+  // Single-part
+  const topType = getHeader(raw, 'content-type')
+  if (topType.includes('text/html')) {
     return { html: decodeBodyPart(raw), text: '' }
   }
   return { html: '', text: decodeBodyPart(raw) }
