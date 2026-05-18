@@ -98,11 +98,16 @@ export async function pollAndForward(
               // This ensures QP/base64 headers are always with their content
               const { html: bodyHtml, text: bodyText } = getBestBody(raw)
 
+              // Ensure we have clean, UTF-8 content
+              // Remove any remaining QP artifacts if present (shouldn't be, but defensive)
+              const cleanHtml = bodyHtml ? bodyHtml.replace(/=\r\n/g, '').replace(/=\n/g, '') : ''
+              const cleanText = bodyText ? bodyText.replace(/=\r\n/g, '').replace(/=\n/g, '') : ''
+
               // bodyHtml is already decoded HTML — inject directly, never escape
               // bodyText is decoded plain text — escape then wrap in pre
-              const bodyContent = bodyHtml
-                ? bodyHtml
-                : `<pre style="white-space:pre-wrap;font-family:inherit;margin:0">${escapeHtml(bodyText)}</pre>`
+              const bodyContent = cleanHtml
+                ? cleanHtml
+                : `<pre style="white-space:pre-wrap;font-family:inherit;margin:0">${escapeHtml(cleanText)}</pre>`
 
               await transporter.sendMail({
                 from: `MailRelay <${process.env.SMTP_USER}>`,
@@ -238,11 +243,19 @@ function decodeBodyPart(part: string): string {
   const charset = (headers.match(/charset\s*=\s*["']?([^"'\s;]+)/i)?.[1] ?? 'utf-8').toLowerCase()
 
   if (enc === 'quoted-printable') {
-    body = body
-      .replace(/=\r\n/g, '')
-      .replace(/=\n/g, '')
-      .replace(/=([0-9A-Fa-f]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
-    if (charset === 'utf-8') {
+    // First: remove soft line breaks (=\r\n or =\n)
+    body = body.replace(/=\r\n/g, '').replace(/=\n/g, '')
+    
+    // Second: decode QP sequences (=XX where XX is hex)
+    // This creates a binary/latin1 string that represents the encoded bytes
+    body = body.replace(/=([0-9A-Fa-f]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+    
+    // Third: convert from the original charset to UTF-8 string
+    // QP-encoded data is usually latin1/ISO-8859-1 bytes, so we need to convert
+    if (charset !== 'utf-8') {
+      try { body = Buffer.from(body, 'latin1').toString('utf8') } catch {}
+    } else {
+      // Even for UTF-8, we decoded as chars above, so convert to proper UTF-8
       try { body = Buffer.from(body, 'latin1').toString('utf8') } catch {}
     }
   } else if (enc === 'base64') {
