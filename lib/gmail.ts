@@ -783,10 +783,7 @@ function getBestBody(raw: string, depth = 0): { html: string; text: string } {
 
   if (boundaryMatch) {
     const boundary = boundaryMatch[1].trim()
-    const parts = decodedBody
-      .split(new RegExp(`\r?\n--${escapeRegex(boundary)}`))
-      .slice(1)
-      .filter(p => !p.trimStart().startsWith('--'))
+    const parts = splitMimeParts(decodedBody, boundary)
 
     let htmlPart = ''
     let textPart = ''
@@ -804,9 +801,9 @@ function getBestBody(raw: string, depth = 0): { html: string; text: string } {
       }
 
       if (ct.includes('text/html') && !htmlPart) {
-        htmlPart = decodeBodyPart(part)
+        htmlPart = decodeQPIfNeeded(decodeBodyPart(part))
       } else if (ct.includes('text/plain') && !textPart) {
-        textPart = decodeBodyPart(part)
+        textPart = decodeQPIfNeeded(decodeBodyPart(part))
       }
     }
 
@@ -816,9 +813,9 @@ function getBestBody(raw: string, depth = 0): { html: string; text: string } {
   // Single-part — the decoded body IS the content
   const topType = getHeader(topHeaders, 'content-type')
   if (topType.includes('text/html')) {
-    return { html: decodedBody.trim(), text: '' }
+    return { html: decodeQPIfNeeded(decodedBody.trim()), text: '' }
   }
-  return { html: '', text: decodedBody.trim() }
+  return { html: '', text: decodeQPIfNeeded(decodedBody.trim()) }
 }
 
 /**
@@ -852,11 +849,18 @@ function getHeader(part: string, name: string): string {
   return match ? match[1].trim().toLowerCase() : ''
 }
 
+function splitMimeParts(body: string, boundary: string): string[] {
+  return body
+    .split(new RegExp(`(?:^|\r?\n)--${escapeRegex(boundary)}`))
+    .slice(1)
+    .filter(p => !p.trimStart().startsWith('--'))
+}
+
 /**
  * Decode quoted-printable encoding.
  * Handles soft line breaks (=\r\n, =\n) and hex sequences (=XX).
  */
-function decodeQP(input: string, charset = 'utf-8'): string {
+function decodeQP(input: string): string {
   // Step 1: remove soft line breaks
   let result = input.replace(/=\r\n/g, '').replace(/=\n/g, '')
 
@@ -871,6 +875,16 @@ function decodeQP(input: string, charset = 'utf-8'): string {
   } catch {}
 
   return result
+}
+
+function decodeQPIfNeeded(input: string): string {
+  if (!looksQuotedPrintable(input)) return input
+  return decodeQP(input)
+}
+
+function looksQuotedPrintable(input: string): boolean {
+  const matches = input.match(/=(?:\r?\n|[0-9A-Fa-f]{2})/g)
+  return (matches?.length ?? 0) >= 3 || /<[^>]+=\r?\n|<[^>]+=3D/i.test(input)
 }
 
 /** Decode a single MIME part — strips headers, decodes QP or base64 */

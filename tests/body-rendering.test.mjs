@@ -36,17 +36,36 @@ function decodeBodyPart(part) {
   return body
 }
 
+function splitMimeParts(body, boundary) {
+  return body
+    .split(new RegExp(`(?:^|\\r?\\n)--${escapeRegex(boundary)}`))
+    .slice(1)
+    .filter(p => !p.trimStart().startsWith('--'))
+}
+
 function getBestBody(raw, depth = 0) {
   if (!raw || depth > 5) return { html: '', text: '' }
 
-  const boundaryMatch = raw.match(/boundary=\s*"?([^"\r\n;]+)"?/i)
+  const crlfIdx = raw.indexOf('\r\n\r\n')
+  const lfIdx = raw.indexOf('\n\n')
+  const headerEnd = crlfIdx !== -1 ? crlfIdx + 4 : lfIdx !== -1 ? lfIdx + 2 : 0
+  const topHeaders = raw.slice(0, headerEnd)
+  const topBody = raw.slice(headerEnd)
+  const topEnc = (topHeaders.match(/content-transfer-encoding:\s*([^\r\n]+)/i)?.[1] ?? '').trim().toLowerCase()
+
+  let decodedBody = topBody
+  if (topEnc === 'quoted-printable') {
+    decodedBody = decodeBodyPart(topHeaders + topBody)
+  } else if (topEnc === 'base64') {
+    try { decodedBody = Buffer.from(topBody.replace(/\s/g, ''), 'base64').toString('utf8') } catch {}
+  }
+
+  const fullDecoded = topHeaders + decodedBody
+  const boundaryMatch = fullDecoded.match(/boundary=\s*"?([^"\r\n;]+)"?/i)
 
   if (boundaryMatch) {
     const boundary = boundaryMatch[1].trim()
-    const parts = raw
-      .split(new RegExp(`\r?\n--${escapeRegex(boundary)}`))
-      .slice(1)
-      .filter(p => !p.startsWith('--'))
+    const parts = splitMimeParts(decodedBody, boundary)
 
     let htmlPart = ''
     let textPart = ''
@@ -63,18 +82,28 @@ function getBestBody(raw, depth = 0) {
       }
 
       if (ct.includes('text/html') && !htmlPart) {
-        htmlPart = decodeBodyPart(part)
+        htmlPart = decodeQPIfNeeded(decodeBodyPart(part))
       } else if (ct.includes('text/plain') && !textPart) {
-        textPart = decodeBodyPart(part)
+        textPart = decodeQPIfNeeded(decodeBodyPart(part))
       }
     }
 
     return { html: htmlPart, text: textPart }
   }
 
-  const topType = getHeader(raw, 'content-type')
-  if (topType.includes('text/html')) return { html: decodeBodyPart(raw), text: '' }
-  return { html: '', text: decodeBodyPart(raw) }
+  const topType = getHeader(topHeaders, 'content-type')
+  if (topType.includes('text/html')) return { html: decodeQPIfNeeded(decodedBody.trim()), text: '' }
+  return { html: '', text: decodeQPIfNeeded(decodedBody.trim()) }
+}
+
+function decodeQPIfNeeded(input) {
+  if (!looksQuotedPrintable(input)) return input
+  return decodeBodyPart(`Content-Transfer-Encoding: quoted-printable\r\n\r\n${input}`)
+}
+
+function looksQuotedPrintable(input) {
+  const matches = input.match(/=(?:\r?\n|[0-9A-Fa-f]{2})/g)
+  return (matches?.length ?? 0) >= 3 || /<[^>]+=\r?\n|<[^>]+=3D/i.test(input)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────
@@ -154,6 +183,16 @@ describe('single-part QP HTML', () => {
   test('decodes correctly', () => {
     const raw = 'Content-Type: text/html; charset=utf-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n<p style=3D"color:red">Hello=20World</p>'
     assert.equal(getBestBody(raw).html, '<p style="color:red">Hello World</p>')
+  })
+})
+
+describe('QP-looking HTML without transfer header', () => {
+  test('decodes defensive fallback for real-world malformed parts', () => {
+    const raw = 'Content-Type: text/html; charset=utf-8\r\n\r\n<center class=3D"wrapper" data-body-style=\r\n=3D"font-size:14px">Hello=20World</center>'
+    assert.equal(
+      getBestBody(raw).html,
+      '<center class="wrapper" data-body-style="font-size:14px">Hello World</center>'
+    )
   })
 })
 
