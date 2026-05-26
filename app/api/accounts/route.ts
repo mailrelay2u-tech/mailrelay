@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
     user_id: user.id,
     label,
     email,
-    app_password_encrypted: encrypt(app_password),
+    app_password_encrypted: encrypt(app_password.replace(/\s/g, '')),
   })
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
@@ -50,7 +50,7 @@ export async function PATCH(req: NextRequest) {
   if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
 
   const updates: Record<string, unknown> = { ...rest }
-  if (app_password) updates.app_password_encrypted = encrypt(app_password)
+  if (app_password) updates.app_password_encrypted = encrypt(app_password.replace(/\s/g, ''))
 
   const supabase = await createServiceClient()
   const { error } = await supabase.from('gmail_accounts').update(updates).eq('id', id).eq('user_id', user.id)

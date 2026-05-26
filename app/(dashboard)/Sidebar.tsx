@@ -95,8 +95,8 @@ function NavLink({ href, label, icon, onClick }: {
   )
 }
 
-function SidebarNav({ userName, userEmail, onNav }: {
-  userName: string; userEmail: string; onNav?: () => void
+function SidebarNav({ userName, userEmail, isSuperAdmin, onNav }: {
+  userName: string; userEmail: string; isSuperAdmin: boolean; onNav?: () => void
 }) {
   const router = useRouter()
   const [signingOut, setSigningOut] = useState(false)
@@ -113,9 +113,11 @@ function SidebarNav({ userName, userEmail, onNav }: {
     <div className="flex flex-col h-full overflow-hidden">
       {/* Nav items */}
       <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-        {navItems.map(item => (
-          <NavLink key={item.href} {...item} onClick={onNav} />
-        ))}
+        {navItems
+          .filter(item => item.href !== '/admin/invites' || isSuperAdmin)
+          .map(item => (
+            <NavLink key={item.href} {...item} onClick={onNav} />
+          ))}
       </nav>
 
       {/* User + sign out */}
@@ -157,7 +159,7 @@ function SidebarNav({ userName, userEmail, onNav }: {
   )
 }
 
-export default function Sidebar({ userName, userEmail }: { userName: string; userEmail: string }) {
+export default function Sidebar({ userName, userEmail, isSuperAdmin }: { userName: string; userEmail: string; isSuperAdmin: boolean }) {
   const [open, setOpen] = useState(false)
 
   // Close drawer on route change
@@ -218,7 +220,7 @@ export default function Sidebar({ userName, userEmail }: { userName: string; use
 
             {/* Nav */}
             <div className="flex-1 overflow-hidden">
-              <SidebarNav userName={userName} userEmail={userEmail} onNav={() => setOpen(false)} />
+              <SidebarNav userName={userName} userEmail={userEmail} isSuperAdmin={isSuperAdmin} onNav={() => setOpen(false)} />
             </div>
           </div>
         </div>
@@ -234,7 +236,7 @@ export default function Sidebar({ userName, userEmail }: { userName: string; use
           <ThemeToggle />
         </div>
         <div className="flex-1 overflow-hidden">
-          <SidebarNav userName={userName} userEmail={userEmail} />
+          <SidebarNav userName={userName} userEmail={userEmail} isSuperAdmin={isSuperAdmin} />
         </div>
       </aside>
 

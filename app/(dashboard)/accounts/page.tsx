@@ -112,7 +112,8 @@ export default function AccountsPage() {
             onChange={e => setForm(f => ({ ...f, email: e.target.value }))} />
           <div className="relative">
             <Input placeholder="App Password" type={showPass ? 'text' : 'password'} value={form.app_password}
-              onChange={e => setForm(f => ({ ...f, app_password: e.target.value }))} />
+              onChange={e => setForm(f => ({ ...f, app_password: e.target.value.replace(/\s/g, '') }))}
+              onPaste={e => { e.preventDefault(); const v = e.clipboardData.getData('text').replace(/\s/g, ''); setForm(f => ({ ...f, app_password: v })) }} />
             <button type="button" onClick={() => setShowPass(s => !s)}
               className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -173,7 +174,9 @@ export default function AccountsPage() {
               {rotateId === acc.id && (
                 <div className="flex gap-2 pt-1">
                   <Input type="password" placeholder="New app password" value={rotatePass}
-                    onChange={e => setRotatePass(e.target.value)} className="flex-1" />
+                    onChange={e => setRotatePass(e.target.value.replace(/\s/g, ''))}
+                    onPaste={e => { e.preventDefault(); setRotatePass(e.clipboardData.getData('text').replace(/\s/g, '')) }}
+                    className="flex-1" />
                   <Btn onClick={() => rotatePassword(acc.id)} disabled={saving}>
                     {saving ? '…' : 'Update'}
                   </Btn>

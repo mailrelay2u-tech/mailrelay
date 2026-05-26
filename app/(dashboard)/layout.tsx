@@ -9,17 +9,19 @@ export default async function DashboardLayout({ children }: { children: React.Re
 
   const { data: profile } = await supabase
     .from('profiles')
-    .select('name')
+    .select('name, role')
     .eq('id', user.id)
     .single()
 
+  const isSuperAdmin = profile?.role === 'superadmin'
+
   return (
     <div className="flex h-screen overflow-hidden bg-gray-50 dark:bg-gray-950">
-      <Sidebar userName={profile?.name ?? user.email ?? ''} userEmail={user.email ?? ''} />
-      {/*
-        pt-14 on mobile = clears the fixed top bar (h-14)
-        md:pt-0 on desktop = sidebar is static, no top bar
-      */}
+      <Sidebar
+        userName={profile?.name ?? user.email ?? ''}
+        userEmail={user.email ?? ''}
+        isSuperAdmin={isSuperAdmin}
+      />
       <main className="flex-1 overflow-y-auto pt-14 md:pt-0">
         <div className="p-4 md:p-6 max-w-6xl mx-auto">
           {children}

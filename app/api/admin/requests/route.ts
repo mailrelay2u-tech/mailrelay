@@ -2,10 +2,13 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { sendAdminNotification } from '@/lib/email'
 
-async function requireAdmin() {
+async function requireSuperAdmin() {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  return user ?? null
+  if (!user) return null
+  const { data: profile } = await supabase
+    .from('profiles').select('role').eq('id', user.id).single()
+  return profile?.role === 'superadmin' ? user : null
 }
 
 // Public: notify admin of new signup (called fire-and-forget from signup page)
@@ -24,7 +27,7 @@ export async function POST(req: NextRequest) {
 
 // Admin: list requests
 export async function GET() {
-  const admin = await requireAdmin()
+  const admin = await requireSuperAdmin()
   if (!admin) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
   const supabase = await createServiceClient()
@@ -39,7 +42,7 @@ export async function GET() {
 
 // Admin: approve/reject
 export async function PATCH(req: NextRequest) {
-  const admin = await requireAdmin()
+  const admin = await requireSuperAdmin()
   if (!admin) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
   const { id, action } = await req.json()

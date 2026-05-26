@@ -48,12 +48,13 @@ create table gmail_accounts (
   id                     uuid primary key default gen_random_uuid(),
   user_id                uuid references profiles(id) on delete cascade,
   label                  text not null,
-  email                  text not null unique,
+  email                  text not null,
   app_password_encrypted text not null,   -- AES-256-GCM encrypted
   active                 boolean default true,
   last_polled_at         timestamptz,
   last_poll_status       text,            -- ok | auth_error | imap_error
-  created_at             timestamptz default now()
+  created_at             timestamptz default now(),
+  unique(user_id, email)
 );
 
 create table rules (

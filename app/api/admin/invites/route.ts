@@ -3,10 +3,13 @@ import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { sendInviteCodeToAdmin } from '@/lib/email'
 import { randomBytes } from 'crypto'
 
-async function requireAdmin() {
+async function requireSuperAdmin() {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  return user ?? null
+  if (!user) return null
+  const { data: profile } = await supabase
+    .from('profiles').select('role').eq('id', user.id).single()
+  return profile?.role === 'superadmin' ? user : null
 }
 
 function generateCode() {
@@ -17,7 +20,7 @@ function generateCode() {
 
 // Generate invite code for a signup request — code is emailed to SMTP_USER (admin)
 export async function POST(req: NextRequest) {
-  const admin = await requireAdmin()
+  const admin = await requireSuperAdmin()
   if (!admin) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
   const { email, request_id, name } = await req.json()
@@ -40,7 +43,7 @@ export async function POST(req: NextRequest) {
 }
 
 export async function GET() {
-  const admin = await requireAdmin()
+  const admin = await requireSuperAdmin()
   if (!admin) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
   const supabase = await createServiceClient()
@@ -54,7 +57,7 @@ export async function GET() {
 }
 
 export async function DELETE(req: NextRequest) {
-  const admin = await requireAdmin()
+  const admin = await requireSuperAdmin()
   if (!admin) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
   const { id } = await req.json()
