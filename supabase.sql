@@ -300,20 +300,16 @@ $$;
 --
 -- 1. Dashboard → Database → Extensions → enable pg_cron and pg_net
 --
--- 2. Schedule the poll:
+-- 2. Schedule the poll (uses pg_net async — does not wait for response):
 -- SELECT cron.unschedule('mailrelay-poll');
 --
 -- SELECT cron.schedule(
 --   'mailrelay-poll',
 --   '* * * * *',
 --   $$
---     SELECT extensions.http((
---       'GET',
---       'https://YOUR_APP_URL/api/poll-gmail?secret=mailrelay_cron_secret_2024',
---       ARRAY[]::extensions.http_header[],
---       NULL,
---       NULL
---     )::extensions.http_request);
+--     SELECT net.http_get(
+--       url := 'https://YOUR_APP_URL/api/poll-gmail?secret=mailrelay_cron_secret_2024'
+--     );
 --   $$
 -- );
 --
