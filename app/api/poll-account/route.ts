@@ -2,8 +2,6 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { pollAndForward } from '@/lib/gmail'
 
-export const maxDuration = 10
-
 export async function GET(req: NextRequest) {
   const secret = req.nextUrl.searchParams.get('secret')
   if (secret !== process.env.CRON_SECRET) {
@@ -17,7 +15,7 @@ export async function GET(req: NextRequest) {
 
   const { data: account } = await supabase
     .from('gmail_accounts')
-    .select('id, email, app_password_encrypted')
+    .select('id, email, app_password_encrypted, last_polled_at')
     .eq('id', accountId)
     .eq('active', true)
     .single()
@@ -30,7 +28,11 @@ export async function GET(req: NextRequest) {
     .eq('account_id', accountId)
     .eq('active', true)
 
-  const sinceDate = new Date(Date.now() - 30 * 60 * 1000)
+  // Use last_polled_at as the since date so no emails are missed between polls.
+  // Fall back to 24h ago if never polled before.
+  const sinceDate = account.last_polled_at
+    ? new Date(account.last_polled_at)
+    : new Date(Date.now() - 24 * 60 * 60 * 1000)
   const since7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
 
   const { data: recentLogs } = await supabase

@@ -1,10 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 
-// Orchestrator — runs in <2s, just fans out to per-account workers
-// Each worker (poll-account) gets its own full 10s Vercel function budget
-export const maxDuration = 10
-
 export async function GET(req: NextRequest) {
   const secret = req.nextUrl.searchParams.get('secret')
   if (secret !== process.env.CRON_SECRET) {
@@ -25,14 +21,15 @@ export async function GET(req: NextRequest) {
   // (localhost in dev, mailrelay-jet.vercel.app in prod)
   const base = `${req.nextUrl.protocol}//${req.nextUrl.host}`
 
-  // Fire all per-account workers in parallel — do NOT await them
-  // Each runs independently in its own Vercel function invocation
-  accounts.forEach(account => {
-    fetch(
-      `${base}/api/poll-account?secret=${process.env.CRON_SECRET}&account_id=${account.id}`,
-      { method: 'GET' }
-    ).catch(() => {}) // fire-and-forget — errors handled inside poll-account
-  })
+  // On Render, await all accounts directly — no Vercel function timeout constraints
+  const results = await Promise.all(
+    accounts.map(account =>
+      fetch(
+        `${base}/api/poll-account?secret=${process.env.CRON_SECRET}&account_id=${account.id}`,
+        { method: 'GET' }
+      ).then(r => r.json()).catch(e => ({ ok: false, error: String(e) }))
+    )
+  )
 
   await supabase.from('app_state').upsert({
     key: 'last_checked',
@@ -43,5 +40,6 @@ export async function GET(req: NextRequest) {
     ok: true,
     dispatched: accounts.length,
     accounts: accounts.map(a => a.email),
+    results,
   })
 }
