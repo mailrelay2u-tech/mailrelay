@@ -76,7 +76,7 @@ async function runPoll() {
 
       await supabase.from('gmail_accounts').update({
         last_polled_at: now,
-        last_poll_status: status,
+        last_poll_status: status + ': ' + msg.slice(0, 200),
       }).eq('id', account.id)
     }
   }))
@@ -93,9 +93,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  // Respond immediately so pg_cron doesn't timeout waiting for IMAP
-  // Poll runs in background after response is sent
-  runPoll().catch(() => {})
+  await runPoll().catch(() => {})
 
-  return NextResponse.json({ ok: true, started: true })
+  return NextResponse.json({ ok: true })
 }
