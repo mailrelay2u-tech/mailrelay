@@ -633,8 +633,8 @@ export async function pollAndForward(
     secure: true,
     auth: { user: account.email, pass: password },
     logger: false,
-    socketTimeout: 4000,
-    greetingTimeout: 4000,
+    socketTimeout: 20000,
+    greetingTimeout: 15000,
   })
 
   await client.connect()

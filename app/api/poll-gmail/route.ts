@@ -50,11 +50,11 @@ export async function GET(req: NextRequest) {
           .map(rr => rr.recipients?.email).filter(Boolean) as string[],
       }))
 
-      // Use last_polled_at so no emails are missed between polls
-      // Fall back to 24h if never polled
+      // Cap sinceDate to 1h max to avoid scanning huge backlogs
+      const max1h = new Date(Date.now() - 60 * 60 * 1000)
       const sinceDate = account.last_polled_at
-        ? new Date(account.last_polled_at)
-        : new Date(Date.now() - 24 * 60 * 60 * 1000)
+        ? new Date(Math.max(new Date(account.last_polled_at).getTime(), max1h.getTime()))
+        : max1h
 
       const forwarded = await pollAndForward(account, formattedRules, sinceDate, alreadyForwarded)
 
