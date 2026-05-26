@@ -635,7 +635,11 @@ export async function pollAndForward(
     logger: false,
     socketTimeout: 20000,
     greetingTimeout: 15000,
+    tls: { rejectUnauthorized: false },
   })
+
+  // Prevent uncaught IMAP socket errors from crashing the process
+  client.on('error', () => {})
 
   await client.connect()
   const results: ForwardResult[] = []

@@ -2,12 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { pollAndForward } from '@/lib/gmail'
 
-export async function GET(req: NextRequest) {
-  const secret = req.nextUrl.searchParams.get('secret')
-  if (secret !== process.env.CRON_SECRET) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
+async function runPoll() {
   const supabase = await createServiceClient()
 
   const { data: accounts, error } = await supabase
@@ -15,12 +10,11 @@ export async function GET(req: NextRequest) {
     .select('id, email, app_password_encrypted, last_polled_at')
     .eq('active', true)
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  if (!accounts?.length) return NextResponse.json({ ok: true, dispatched: 0 })
+  if (error || !accounts?.length) return
 
   const since7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
 
-  const results = await Promise.all(accounts.map(async account => {
+  await Promise.all(accounts.map(async account => {
     const now = new Date().toISOString()
 
     try {
@@ -50,7 +44,6 @@ export async function GET(req: NextRequest) {
           .map(rr => rr.recipients?.email).filter(Boolean) as string[],
       }))
 
-      // Cap sinceDate to 1h max to avoid scanning huge backlogs
       const max1h = new Date(Date.now() - 60 * 60 * 1000)
       const sinceDate = account.last_polled_at
         ? new Date(Math.max(new Date(account.last_polled_at).getTime(), max1h.getTime()))
@@ -76,8 +69,6 @@ export async function GET(req: NextRequest) {
         last_poll_status: 'ok',
       }).eq('id', account.id)
 
-      return { account: account.email, ok: true, forwarded: forwarded.length }
-
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
       const status = msg.includes('AUTHENTICATIONFAILED') || msg.includes('Invalid credentials') ||
@@ -87,8 +78,6 @@ export async function GET(req: NextRequest) {
         last_polled_at: now,
         last_poll_status: status,
       }).eq('id', account.id)
-
-      return { account: account.email, ok: false, error: msg }
     }
   }))
 
@@ -96,6 +85,17 @@ export async function GET(req: NextRequest) {
     key: 'last_checked',
     value: new Date().toISOString(),
   })
+}
 
-  return NextResponse.json({ ok: true, dispatched: accounts.length, results })
+export async function GET(req: NextRequest) {
+  const secret = req.nextUrl.searchParams.get('secret')
+  if (secret !== process.env.CRON_SECRET) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  // Respond immediately so pg_cron doesn't timeout waiting for IMAP
+  // Poll runs in background after response is sent
+  runPoll().catch(() => {})
+
+  return NextResponse.json({ ok: true, started: true })
 }
