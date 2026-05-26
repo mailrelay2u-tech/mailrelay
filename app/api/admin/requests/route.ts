@@ -8,14 +8,14 @@ async function requireAdmin() {
   return user ?? null
 }
 
-// Public: submit signup request
+// Public: notify admin of new signup (called fire-and-forget from signup page)
 export async function POST(req: NextRequest) {
   const { name, email } = await req.json()
-  if (!name || !email) return NextResponse.json({ error: 'Missing fields' }, { status: 400 })
+  if (!name || !email) return NextResponse.json({ ok: true }) // silent — non-blocking
 
   const supabase = await createServiceClient()
-  const { error } = await supabase.from('signup_requests').insert({ name, email })
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  // Best-effort insert — ignore duplicate email errors
+  await supabase.from('signup_requests').upsert({ name, email, status: 'approved' }, { onConflict: 'email' })
 
   try { await sendAdminNotification(name, email) } catch {}
 
