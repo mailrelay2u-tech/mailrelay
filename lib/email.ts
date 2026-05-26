@@ -1,11 +1,13 @@
 import nodemailer from 'nodemailer'
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
   port: Number(process.env.SMTP_PORT),
   secure: false,
   auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-})
+  tls: { family: 4 },
+} as any)
 
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || process.env.SMTP_USER

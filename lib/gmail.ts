@@ -592,6 +592,7 @@
 import { ImapFlow } from 'imapflow'
 import { decrypt } from './crypto'
 import { transporter } from './email'
+import { promises as dns } from 'dns'
 
 export interface GmailAccount {
   id: string
@@ -627,15 +628,22 @@ export async function pollAndForward(
 ): Promise<ForwardResult[]> {
   const password = decrypt(account.app_password_encrypted)
 
+  // Resolve to IPv4 explicitly to avoid Railway/Render IPv6 issues
+  let imapHost = 'imap.gmail.com'
+  try {
+    const addrs = await dns.resolve4('imap.gmail.com')
+    if (addrs.length > 0) imapHost = addrs[0]
+  } catch {}
+
   const client = new ImapFlow({
-    host: 'imap.gmail.com',
+    host: imapHost,
     port: 993,
     secure: true,
     auth: { user: account.email, pass: password },
     logger: false,
     socketTimeout: 20000,
     greetingTimeout: 15000,
-    tls: { rejectUnauthorized: false },
+    tls: { rejectUnauthorized: false, minVersion: 'TLSv1.2', servername: 'imap.gmail.com' },
   })
 
   // Prevent uncaught IMAP socket errors from crashing the process
