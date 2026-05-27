@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { pollAndForward } from '@/lib/gmail'
 
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+export const maxDuration = 300
+
 export async function GET(req: NextRequest) {
   const secret = req.nextUrl.searchParams.get('secret')
   if (secret !== process.env.CRON_SECRET) {
@@ -55,8 +59,6 @@ export async function GET(req: NextRequest) {
       .map(rr => rr.recipients?.email).filter(Boolean) as string[],
   }))
 
-  const now = new Date().toISOString()
-
   try {
     const results = await pollAndForward(account, formattedRules, sinceDate, alreadyForwarded)
 
@@ -73,6 +75,7 @@ export async function GET(req: NextRequest) {
       )
     }
 
+    const now = new Date().toISOString()
     await supabase.from('gmail_accounts').update({
       last_polled_at: now,
       last_poll_status: 'ok',
@@ -84,11 +87,16 @@ export async function GET(req: NextRequest) {
 
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err)
-    const status = msg.includes('AUTHENTICATIONFAILED') || msg.includes('Invalid credentials') ||
-      msg.includes('auth') || msg.includes('LOGIN') ? 'auth_error' : 'imap_error'
+    const lower = msg.toLowerCase()
+    const status = lower.includes('authenticationfailed') || lower.includes('invalid credentials') ||
+      lower.includes('auth') || lower.includes('login')
+      ? 'auth_error'
+      : lower.includes('brevo send failed') || lower.includes('missing environment variable: brevo') ||
+        lower.includes('missing email recipient')
+        ? 'send_error'
+        : 'imap_error'
 
     await supabase.from('gmail_accounts').update({
-      last_polled_at: now,
       last_poll_status: status,
     }).eq('id', accountId)
 

@@ -591,7 +591,7 @@
 // }
 import { ImapFlow } from 'imapflow'
 import { decrypt } from './crypto'
-import { getTransporter } from './email'
+import { getDefaultFrom, getTransporter } from './email'
 import { lookup as dnsLookup, promises as dns } from 'dns'
 
 export interface GmailAccount {
@@ -623,7 +623,7 @@ const IMAP_MAX_HOST_ATTEMPTS = Number(process.env.IMAP_MAX_HOST_ATTEMPTS ?? 2)
 
 /**
  * Connect to Gmail IMAP, fetch all messages since `sinceDate`,
- * match against rules, forward matches via SMTP.
+ * match against rules, forward matches via the configured mail API.
  */
 export async function pollAndForward(
   account: GmailAccount,
@@ -682,7 +682,7 @@ export async function pollAndForward(
 
               const transporter = await getTransporter()
               await transporter.sendMail({
-                from: `MailRelay <${process.env.SMTP_USER}>`,
+                from: getDefaultFrom(),
                 to: rule.recipients,
                 replyTo: from,
                 subject: `[Fwd] ${subject}`,

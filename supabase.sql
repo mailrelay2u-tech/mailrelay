@@ -300,21 +300,22 @@ $$;
 --
 -- 1. Dashboard → Database → Extensions → enable pg_cron and pg_net
 --    Or run: CREATE EXTENSION IF NOT EXISTS pg_net;
---    pg_net creates the `net` schema used by net.http_get.
+--    pg_net creates the `net` schema used by net.http_post.
 --
 -- 2. Schedule the poll. pg_net defaults to a 2s HTTP timeout, which is too
---    short for cold starts. The app endpoint returns 202 quickly and keeps
---    the Gmail poll running in the Railway/Render Node process.
+--    short for a real Gmail poll. Keep a separate Render wake job pointed at
+--    /api/keepalive every 10-14 minutes, then let this cron wait for completion.
 -- SELECT cron.unschedule('mailrelay-poll');
 --
 -- SELECT cron.schedule(
 --   'mailrelay-poll',
 --   '* * * * *',
 --   $$
---     SELECT net.http_get(
---       url := 'https://YOUR_APP_URL/api/poll-gmail',
+--     SELECT net.http_post(
+--       url := 'https://mailrelay.onrender.com/api/poll-gmail?wait=1',
+--       body := '{}'::jsonb,
 --       headers := jsonb_build_object('x-cron-secret', 'YOUR_CRON_SECRET'),
---       timeout_milliseconds := 15000
+--       timeout_milliseconds := 60000
 --     );
 --   $$
 -- );

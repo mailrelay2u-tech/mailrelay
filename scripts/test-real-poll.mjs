@@ -3,7 +3,6 @@ import { resolve } from 'node:path'
 import { scryptSync, createDecipheriv } from 'node:crypto'
 import { createClient } from '@supabase/supabase-js'
 import { ImapFlow } from 'imapflow'
-import nodemailer from 'nodemailer'
 
 loadEnvFile('.env.local')
 
@@ -46,10 +45,8 @@ if (args['list-accounts']) {
 
   const pollEnv = [
     'ENCRYPTION_SECRET',
-    'SMTP_HOST',
-    'SMTP_PORT',
-    'SMTP_USER',
-    'SMTP_PASS',
+    'BREVO_API_KEY',
+    'BREVO_FROM_EMAIL',
   ]
 
   for (const name of pollEnv) {
@@ -265,24 +262,27 @@ function matchesRule(rule, from, subject) {
 }
 
 async function sendForward(match, recipients) {
-  const transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port: Number(process.env.SMTP_PORT),
-    secure: false,
-    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-  })
-
-  await transporter.sendMail({
-    from: `MailRelay <${process.env.SMTP_USER}>`,
-    to: recipients,
-    replyTo: match.from,
-    subject: `[Local Test Fwd] ${match.subject}`,
+  const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method: 'POST',
     headers: {
-      'X-Forwarded-From': match.from,
-      'X-Forwarded-By': 'MailRelay Local Test',
-      'X-Original-Subject': match.subject,
+      accept: 'application/json',
+      'api-key': process.env.BREVO_API_KEY,
+      'content-type': 'application/json',
     },
-    html: `
+    body: JSON.stringify({
+      sender: {
+        name: process.env.BREVO_FROM_NAME || 'MailRelay',
+        email: process.env.BREVO_FROM_EMAIL,
+      },
+      to: recipients.map(email => ({ email })),
+      replyTo: { email: match.from },
+      subject: `[Local Test Fwd] ${match.subject}`,
+      headers: {
+        'X-Forwarded-From': match.from,
+        'X-Forwarded-By': 'MailRelay Local Test',
+        'X-Original-Subject': match.subject,
+      },
+      htmlContent: `
       <div style="font-family:sans-serif;max-width:680px;margin:0 auto">
         <div style="background:#4B6BF1;padding:12px 20px;border-radius:8px 8px 0 0">
           <span style="color:white;font-weight:bold;font-size:15px">MailRelay</span>
@@ -302,7 +302,13 @@ async function sendForward(match, recipients) {
         </div>
       </div>
     `,
+    }),
   })
+
+  if (!response.ok) {
+    const errorBody = await response.text().catch(() => '')
+    throw new Error(`Brevo send failed (${response.status}): ${errorBody}`)
+  }
 }
 
 function decrypt(encrypted) {

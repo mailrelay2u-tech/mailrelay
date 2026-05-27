@@ -4,6 +4,7 @@ import { pollAndForward } from '@/lib/gmail'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+export const maxDuration = 300
 
 interface GmailAccount {
   id: string
@@ -23,7 +24,7 @@ interface RuleRow {
 interface AccountPollResult {
   accountId: string
   email: string
-  status: 'ok' | 'auth_error' | 'imap_error'
+  status: 'ok' | 'auth_error' | 'imap_error' | 'send_error'
   forwarded: number
   error?: string
 }
@@ -38,6 +39,8 @@ interface PollSummary {
   error?: string
 }
 
+type ServiceClient = Awaited<ReturnType<typeof createServiceClient>>
+
 let activePoll: Promise<PollSummary> | null = null
 let lastPollSummary: PollSummary | null = null
 
@@ -49,10 +52,8 @@ async function runPoll(): Promise<PollSummary> {
     requireEnv('NEXT_PUBLIC_SUPABASE_URL')
     requireEnv('SUPABASE_SERVICE_ROLE_KEY')
     requireEnv('ENCRYPTION_SECRET')
-    requireEnv('SMTP_HOST')
-    requireEnv('SMTP_PORT')
-    requireEnv('SMTP_USER')
-    requireEnv('SMTP_PASS')
+    requireEnv('BREVO_API_KEY')
+    requireEnv('BREVO_FROM_EMAIL')
 
     const supabase = await createServiceClient()
 
@@ -65,87 +66,13 @@ async function runPoll(): Promise<PollSummary> {
 
     const gmailAccounts = (accounts ?? []) as GmailAccount[]
     const since7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
+    const concurrency = getPositiveInteger(process.env.POLL_ACCOUNT_CONCURRENCY, 3)
 
-    for (const account of gmailAccounts) {
-      const now = new Date().toISOString()
-
-      try {
-        const { data: rules, error: rulesError } = await supabase
-          .from('rules')
-          .select('id, name, from_filter, subject_filter, account_id, rule_recipients(recipients(email))')
-          .eq('account_id', account.id)
-          .eq('active', true)
-
-        if (rulesError) throw new Error(`Could not load rules: ${rulesError.message}`)
-
-        const { data: recentLogs, error: logsError } = await supabase
-          .from('forwarded_log')
-          .select('message_id')
-          .eq('account_id', account.id)
-          .gte('forwarded_at', since7d.toISOString())
-          .not('message_id', 'is', null)
-
-        if (logsError) throw new Error(`Could not load forwarded log: ${logsError.message}`)
-
-        const alreadyForwarded = new Set<string>(
-          (recentLogs ?? []).map((l: { message_id: string }) => l.message_id).filter(Boolean)
-        )
-
-        const formattedRules = ((rules ?? []) as unknown as RuleRow[]).map(rule => ({
-          id: rule.id,
-          name: rule.name,
-          from_filter: rule.from_filter,
-          subject_filter: rule.subject_filter,
-          recipients: getRecipientEmails(rule.rule_recipients),
-        }))
-
-        const sinceDate = getSinceDate(account.last_polled_at)
-        const forwarded = await pollAndForward(account, formattedRules, sinceDate, alreadyForwarded)
-
-        if (forwarded.length > 0) {
-          const { error: insertError } = await supabase.from('forwarded_log').insert(
-            forwarded.map(result => ({
-              account_id: account.id,
-              subject: result.subject,
-              from_address: result.from,
-              forwarded_to: result.recipients,
-              rule_matched: result.ruleName,
-              message_id: result.messageId,
-            }))
-          )
-
-          if (insertError) throw new Error(`Could not write forwarded log: ${insertError.message}`)
-        }
-
-        await supabase.from('gmail_accounts').update({
-          last_polled_at: now,
-          last_poll_status: 'ok',
-        }).eq('id', account.id)
-
-        results.push({
-          accountId: account.id,
-          email: account.email,
-          status: 'ok',
-          forwarded: forwarded.length,
-        })
-      } catch (err: unknown) {
-        const msg = errorMessage(err)
-        const status = classifyPollError(msg)
-
-        await supabase.from('gmail_accounts').update({
-          last_polled_at: now,
-          last_poll_status: `${status}: ${msg.slice(0, 200)}`,
-        }).eq('id', account.id)
-
-        results.push({
-          accountId: account.id,
-          email: account.email,
-          status,
-          forwarded: 0,
-          error: msg,
-        })
-      }
-    }
+    results.push(...await mapWithConcurrency(
+      gmailAccounts,
+      concurrency,
+      account => pollAccount(supabase, account, since7d)
+    ))
 
     const finishedAt = new Date().toISOString()
     const summary: PollSummary = {
@@ -172,6 +99,88 @@ async function runPoll(): Promise<PollSummary> {
 
     await writePollState(summary).catch(() => {})
     return summary
+  }
+}
+
+async function pollAccount(
+  supabase: ServiceClient,
+  account: GmailAccount,
+  since7d: Date
+): Promise<AccountPollResult> {
+  try {
+    const { data: rules, error: rulesError } = await supabase
+      .from('rules')
+      .select('id, name, from_filter, subject_filter, account_id, rule_recipients(recipients(email))')
+      .eq('account_id', account.id)
+      .eq('active', true)
+
+    if (rulesError) throw new Error(`Could not load rules: ${rulesError.message}`)
+
+    const { data: recentLogs, error: logsError } = await supabase
+      .from('forwarded_log')
+      .select('message_id')
+      .eq('account_id', account.id)
+      .gte('forwarded_at', since7d.toISOString())
+      .not('message_id', 'is', null)
+
+    if (logsError) throw new Error(`Could not load forwarded log: ${logsError.message}`)
+
+    const alreadyForwarded = new Set<string>(
+      (recentLogs ?? []).map((l: { message_id: string }) => l.message_id).filter(Boolean)
+    )
+
+    const formattedRules = ((rules ?? []) as unknown as RuleRow[]).map(rule => ({
+      id: rule.id,
+      name: rule.name,
+      from_filter: rule.from_filter,
+      subject_filter: rule.subject_filter,
+      recipients: getRecipientEmails(rule.rule_recipients),
+    }))
+
+    const sinceDate = getSinceDate(account.last_polled_at)
+    const forwarded = await pollAndForward(account, formattedRules, sinceDate, alreadyForwarded)
+
+    if (forwarded.length > 0) {
+      const { error: insertError } = await supabase.from('forwarded_log').insert(
+        forwarded.map(result => ({
+          account_id: account.id,
+          subject: result.subject,
+          from_address: result.from,
+          forwarded_to: result.recipients,
+          rule_matched: result.ruleName,
+          message_id: result.messageId,
+        }))
+      )
+
+      if (insertError) throw new Error(`Could not write forwarded log: ${insertError.message}`)
+    }
+
+    await supabase.from('gmail_accounts').update({
+      last_polled_at: new Date().toISOString(),
+      last_poll_status: 'ok',
+    }).eq('id', account.id)
+
+    return {
+      accountId: account.id,
+      email: account.email,
+      status: 'ok',
+      forwarded: forwarded.length,
+    }
+  } catch (err: unknown) {
+    const msg = errorMessage(err)
+    const status = classifyPollError(msg)
+
+    await supabase.from('gmail_accounts').update({
+      last_poll_status: `${status}: ${msg.slice(0, 200)}`,
+    }).eq('id', account.id)
+
+    return {
+      accountId: account.id,
+      email: account.email,
+      status,
+      forwarded: 0,
+      error: msg,
+    }
   }
 }
 
@@ -235,6 +244,32 @@ function getRecipientEmails(ruleRecipients: RuleRow['rule_recipients']) {
     .filter((email): email is string => Boolean(email))
 }
 
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<R>
+) {
+  const results = new Array<R>(items.length)
+  let nextIndex = 0
+  const workerCount = Math.min(Math.max(concurrency, 1), items.length)
+
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex
+      nextIndex += 1
+      results[index] = await fn(items[index])
+    }
+  }))
+
+  return results
+}
+
+function getPositiveInteger(value: string | undefined, fallback: number) {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || parsed < 1) return fallback
+  return Math.floor(parsed)
+}
+
 function classifyPollError(message: string): AccountPollResult['status'] {
   const lower = message.toLowerCase()
   if (
@@ -244,6 +279,14 @@ function classifyPollError(message: string): AccountPollResult['status'] {
     lower.includes('login')
   ) {
     return 'auth_error'
+  }
+
+  if (
+    lower.includes('brevo send failed') ||
+    lower.includes('missing environment variable: brevo') ||
+    lower.includes('missing email recipient')
+  ) {
+    return 'send_error'
   }
 
   return 'imap_error'

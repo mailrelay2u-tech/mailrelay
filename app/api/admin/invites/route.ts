@@ -18,7 +18,7 @@ function generateCode() {
   return `${part(4)}-${part(4)}`
 }
 
-// Generate invite code for a signup request — code is emailed to SMTP_USER (admin)
+// Generate invite code for a signup request; code is emailed to the admin.
 export async function POST(req: NextRequest) {
   const admin = await requireSuperAdmin()
   if (!admin) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
@@ -36,7 +36,7 @@ export async function POST(req: NextRequest) {
     await supabase.from('signup_requests').update({ status: 'approved' }).eq('id', request_id)
   }
 
-  // Email the code to the admin (SMTP_USER), not the requester
+  // Email the code to the admin, not the requester.
   try { await sendInviteCodeToAdmin(name || email, email, code) } catch {}
 
   return NextResponse.json({ ok: true, code })

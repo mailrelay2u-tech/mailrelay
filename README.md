@@ -16,7 +16,7 @@ bun dev
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
-## Railway / Render Cron
+## Render Cron
 
 Set these environment variables on the app service:
 
@@ -26,30 +26,36 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
 ENCRYPTION_SECRET=
 CRON_SECRET=
-SMTP_HOST=
-SMTP_PORT=
-SMTP_USER=
-SMTP_PASS=
+BREVO_API_KEY=
+BREVO_FROM_EMAIL=noreply@jimstechinnovations.com
+BREVO_FROM_NAME=MailRelay
 NEXT_PUBLIC_APP_URL=
 ```
 
-Supabase Cron should call the app with `pg_net` and a header secret:
+Use a separate external keep-alive job to call this lightweight endpoint every 10-14 minutes:
+
+```text
+POST https://mailrelay.onrender.com/api/keepalive
+```
+
+Supabase Cron should call the real poll endpoint with `pg_net` and a header secret:
 
 ```sql
 select cron.schedule(
   'mailrelay-poll',
   '* * * * *',
   $$
-    select net.http_get(
-      url := 'https://YOUR_APP_URL/api/poll-gmail',
+    select net.http_post(
+      url := 'https://mailrelay.onrender.com/api/poll-gmail?wait=1',
+      body := '{}'::jsonb,
       headers := jsonb_build_object('x-cron-secret', 'YOUR_CRON_SECRET'),
-      timeout_milliseconds := 15000
+      timeout_milliseconds := 60000
     );
   $$
 );
 ```
 
-For manual verification, call `/api/poll-gmail?wait=1` with the same `x-cron-secret` header. Normal cron calls should omit `wait=1` so the endpoint returns quickly while the Node process runs the Gmail job.
+For manual verification, call `/api/poll-gmail?wait=1` with the same `x-cron-secret` header. Using `wait=1` makes cron wait for the Gmail poll to finish, so failures are visible instead of being hidden in background work.
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
