@@ -299,6 +299,8 @@ $$;
 -- ============================================================
 --
 -- 1. Dashboard → Database → Extensions → enable pg_cron and pg_net
+--    Or run: CREATE EXTENSION IF NOT EXISTS pg_net;
+--    pg_net creates the `net` schema used by net.http_get.
 --
 -- 2. Schedule the poll. pg_net defaults to a 2s HTTP timeout, which is too
 --    short for cold starts. The app endpoint returns 202 quickly and keeps

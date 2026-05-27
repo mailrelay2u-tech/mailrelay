@@ -23,6 +23,9 @@ export async function GET(req: NextRequest) {
 
   const accountIds = (accounts ?? []).map((a: { id: string }) => a.id)
   if (!accountIds.length) return NextResponse.json({ logs: [], total: 0 })
+  if (accountId && !accountIds.includes(accountId)) {
+    return NextResponse.json({ logs: [], total: 0 })
+  }
 
   let query = service
     .from('forwarded_log')

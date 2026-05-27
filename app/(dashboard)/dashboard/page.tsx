@@ -1,21 +1,40 @@
-import { createClient } from '@/lib/supabase/server'
+import { createClient, createServiceClient } from '@/lib/supabase/server'
 import Link from 'next/link'
 
 async function getStats(userId: string) {
-  const supabase = await createClient()
-  const [accounts, rules, logsToday, logsWeek, logsAll, errors, recent] = await Promise.all([
-    supabase.from('gmail_accounts').select('id, active').eq('user_id', userId),
-    supabase.from('rules').select('id, active'),
+  const supabase = await createServiceClient()
+  const accounts = await supabase.from('gmail_accounts').select('id, active').eq('user_id', userId)
+  const accountIds = (accounts.data ?? []).map(account => account.id)
+
+  if (!accountIds.length) {
+    return {
+      totalAccounts: 0,
+      activeAccounts: 0,
+      activeRules: 0,
+      today: 0,
+      week: 0,
+      all: 0,
+      errors: [],
+      recent: [],
+    }
+  }
+
+  const [rules, logsToday, logsWeek, logsAll, errors, recent] = await Promise.all([
+    supabase.from('rules').select('id, active').in('account_id', accountIds),
     supabase.from('forwarded_log').select('id', { count: 'exact' })
+      .in('account_id', accountIds)
       .gte('forwarded_at', new Date(new Date().setHours(0,0,0,0)).toISOString()),
     supabase.from('forwarded_log').select('id', { count: 'exact' })
+      .in('account_id', accountIds)
       .gte('forwarded_at', new Date(Date.now() - 7 * 86400000).toISOString()),
-    supabase.from('forwarded_log').select('id', { count: 'exact' }),
+    supabase.from('forwarded_log').select('id', { count: 'exact' }).in('account_id', accountIds),
     supabase.from('gmail_accounts').select('id, email, last_poll_status')
       .eq('user_id', userId).neq('last_poll_status', 'ok').not('last_poll_status', 'is', null),
     supabase.from('forwarded_log').select('subject, from_address, forwarded_at, rule_matched')
+      .in('account_id', accountIds)
       .order('forwarded_at', { ascending: false }).limit(10),
   ])
+
   return {
     totalAccounts: accounts.data?.length ?? 0,
     activeAccounts: accounts.data?.filter(a => a.active).length ?? 0,
