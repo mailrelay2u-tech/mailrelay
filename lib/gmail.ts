@@ -616,6 +616,10 @@ export interface ForwardResult {
   messageId: string
 }
 
+const IMAP_CONNECTION_TIMEOUT = Number(process.env.IMAP_CONNECTION_TIMEOUT_MS ?? 10000)
+const IMAP_GREETING_TIMEOUT = Number(process.env.IMAP_GREETING_TIMEOUT_MS ?? 10000)
+const IMAP_SOCKET_TIMEOUT = Number(process.env.IMAP_SOCKET_TIMEOUT_MS ?? 20000)
+
 /**
  * Connect to Gmail IMAP, fetch all messages since `sinceDate`,
  * match against rules, forward matches via SMTP.
@@ -628,28 +632,7 @@ export async function pollAndForward(
 ): Promise<ForwardResult[]> {
   const password = decrypt(account.app_password_encrypted)
 
-  // Resolve to IPv4 explicitly to avoid Railway/Render IPv6 issues
-  let imapHost = 'imap.gmail.com'
-  try {
-    const addrs = await dns.resolve4('imap.gmail.com')
-    if (addrs.length > 0) imapHost = addrs[0]
-  } catch {}
-
-  const client = new ImapFlow({
-    host: imapHost,
-    port: 993,
-    secure: true,
-    auth: { user: account.email, pass: password },
-    logger: false,
-    socketTimeout: 20000,
-    greetingTimeout: 15000,
-    tls: { rejectUnauthorized: false, minVersion: 'TLSv1.2', servername: 'imap.gmail.com' },
-  })
-
-  // Prevent uncaught IMAP socket errors from crashing the process
-  client.on('error', () => {})
-
-  await client.connect()
+  const client = await connectGmailImap(account.email, password)
   const results: ForwardResult[] = []
 
   const folders = ['INBOX', '[Gmail]/Spam']
@@ -751,6 +734,53 @@ export async function pollAndForward(
   }
 
   return results
+}
+
+async function connectGmailImap(email: string, password: string): Promise<ImapFlow> {
+  const hosts = await getGmailImapHosts()
+  let lastError: unknown
+
+  for (const host of hosts) {
+    const client = createGmailClient(host, email, password)
+    try {
+      await client.connect()
+      return client
+    } catch (err: unknown) {
+      lastError = err
+      try { await client.close() } catch {}
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(String(lastError ?? 'Could not connect to Gmail IMAP'))
+}
+
+async function getGmailImapHosts() {
+  const hosts = ['imap.gmail.com']
+  try {
+    const addrs = await dns.resolve4('imap.gmail.com')
+    return [...new Set([...addrs, ...hosts])]
+  } catch {}
+
+  return hosts
+}
+
+function createGmailClient(host: string, email: string, password: string) {
+  const client = new ImapFlow({
+    host,
+    port: 993,
+    secure: true,
+    auth: { user: email, pass: password },
+    logger: false,
+    connectionTimeout: IMAP_CONNECTION_TIMEOUT,
+    greetingTimeout: IMAP_GREETING_TIMEOUT,
+    socketTimeout: IMAP_SOCKET_TIMEOUT,
+    tls: { rejectUnauthorized: false, minVersion: 'TLSv1.2', servername: 'imap.gmail.com' },
+  })
+
+  // Prevent uncaught IMAP socket errors from crashing the process
+  client.on('error', () => {})
+
+  return client
 }
 
 export const idleAndForward = pollAndForward
