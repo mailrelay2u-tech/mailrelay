@@ -66,7 +66,7 @@ async function runPoll(): Promise<PollSummary> {
     const gmailAccounts = (accounts ?? []) as GmailAccount[]
     const since7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
 
-    await Promise.all(gmailAccounts.map(async account => {
+    for (const account of gmailAccounts) {
       const now = new Date().toISOString()
 
       try {
@@ -145,7 +145,7 @@ async function runPoll(): Promise<PollSummary> {
           error: msg,
         })
       }
-    }))
+    }
 
     const finishedAt = new Date().toISOString()
     const summary: PollSummary = {

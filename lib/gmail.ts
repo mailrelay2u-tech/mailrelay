@@ -592,7 +592,7 @@
 import { ImapFlow } from 'imapflow'
 import { decrypt } from './crypto'
 import { getTransporter } from './email'
-import { promises as dns } from 'dns'
+import { lookup as dnsLookup, promises as dns } from 'dns'
 
 export interface GmailAccount {
   id: string
@@ -619,6 +619,7 @@ export interface ForwardResult {
 const IMAP_CONNECTION_TIMEOUT = Number(process.env.IMAP_CONNECTION_TIMEOUT_MS ?? 10000)
 const IMAP_GREETING_TIMEOUT = Number(process.env.IMAP_GREETING_TIMEOUT_MS ?? 10000)
 const IMAP_SOCKET_TIMEOUT = Number(process.env.IMAP_SOCKET_TIMEOUT_MS ?? 20000)
+const IMAP_MAX_HOST_ATTEMPTS = Number(process.env.IMAP_MAX_HOST_ATTEMPTS ?? 2)
 
 /**
  * Connect to Gmail IMAP, fetch all messages since `sinceDate`,
@@ -737,7 +738,8 @@ export async function pollAndForward(
 }
 
 async function connectGmailImap(email: string, password: string): Promise<ImapFlow> {
-  const hosts = await getGmailImapHosts()
+  const hosts = (await getGmailImapHosts()).slice(0, Math.max(1, IMAP_MAX_HOST_ATTEMPTS))
+  const errors: string[] = []
   let lastError: unknown
 
   for (const host of hosts) {
@@ -747,18 +749,20 @@ async function connectGmailImap(email: string, password: string): Promise<ImapFl
       return client
     } catch (err: unknown) {
       lastError = err
+      errors.push(`${host}: ${err instanceof Error ? err.message : String(err)}`)
       try { await client.close() } catch {}
     }
   }
 
-  throw lastError instanceof Error ? lastError : new Error(String(lastError ?? 'Could not connect to Gmail IMAP'))
+  const message = lastError instanceof Error ? lastError.message : String(lastError ?? 'Could not connect to Gmail IMAP')
+  throw new Error(`${message}; attempts: ${errors.join(' | ')}`)
 }
 
 async function getGmailImapHosts() {
   const hosts = ['imap.gmail.com']
   try {
     const addrs = await dns.resolve4('imap.gmail.com')
-    return [...new Set([...addrs, ...hosts])]
+    return [...new Set([...hosts, ...addrs])]
   } catch {}
 
   return hosts
@@ -774,7 +778,12 @@ function createGmailClient(host: string, email: string, password: string) {
     connectionTimeout: IMAP_CONNECTION_TIMEOUT,
     greetingTimeout: IMAP_GREETING_TIMEOUT,
     socketTimeout: IMAP_SOCKET_TIMEOUT,
-    tls: { rejectUnauthorized: false, minVersion: 'TLSv1.2', servername: 'imap.gmail.com' },
+    tls: {
+      rejectUnauthorized: false,
+      minVersion: 'TLSv1.2',
+      servername: 'imap.gmail.com',
+      lookup: (hostname, _options, callback) => dnsLookup(hostname, { family: 4 }, callback),
+    },
   })
 
   // Prevent uncaught IMAP socket errors from crashing the process
