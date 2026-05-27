@@ -300,15 +300,19 @@ $$;
 --
 -- 1. Dashboard → Database → Extensions → enable pg_cron and pg_net
 --
--- 2. Schedule the poll (extensions.http_get is async — returns immediately, no timeout):
+-- 2. Schedule the poll. pg_net defaults to a 2s HTTP timeout, which is too
+--    short for cold starts. The app endpoint returns 202 quickly and keeps
+--    the Gmail poll running in the Railway/Render Node process.
 -- SELECT cron.unschedule('mailrelay-poll');
 --
 -- SELECT cron.schedule(
 --   'mailrelay-poll',
 --   '* * * * *',
 --   $$
---     SELECT extensions.http_get(
---       'https://YOUR_APP_URL/api/poll-gmail?secret=mailrelay_cron_secret_2024'
+--     SELECT net.http_get(
+--       url := 'https://YOUR_APP_URL/api/poll-gmail',
+--       headers := jsonb_build_object('x-cron-secret', 'YOUR_CRON_SECRET'),
+--       timeout_milliseconds := 15000
 --     );
 --   $$
 -- );

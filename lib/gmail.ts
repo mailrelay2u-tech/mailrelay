@@ -591,7 +591,7 @@
 // }
 import { ImapFlow } from 'imapflow'
 import { decrypt } from './crypto'
-import { transporter } from './email'
+import { getTransporter } from './email'
 import { promises as dns } from 'dns'
 
 export interface GmailAccount {
@@ -696,6 +696,7 @@ export async function pollAndForward(
                   ? `<pre style="white-space:pre-wrap;font-family:inherit;margin:0">${escapeHtml(bodyText)}</pre>`
                   : '<p style="color:#6b7280">(No message body)</p>'
 
+              const transporter = await getTransporter()
               await transporter.sendMail({
                 from: `MailRelay <${process.env.SMTP_USER}>`,
                 to: rule.recipients,

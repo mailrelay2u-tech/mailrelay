@@ -2,98 +2,311 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { pollAndForward } from '@/lib/gmail'
 
-async function runPoll() {
-  const supabase = await createServiceClient()
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
 
-  const { data: accounts, error } = await supabase
-    .from('gmail_accounts')
-    .select('id, email, app_password_encrypted, last_polled_at')
-    .eq('active', true)
+interface GmailAccount {
+  id: string
+  email: string
+  app_password_encrypted: string
+  last_polled_at: string | null
+}
 
-  if (error || !accounts?.length) return
+interface RuleRow {
+  id: string
+  name: string
+  from_filter: string | null
+  subject_filter: string | null
+  rule_recipients?: Array<{ recipients: { email: string } | Array<{ email: string }> | null } | null>
+}
 
-  const since7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
+interface AccountPollResult {
+  accountId: string
+  email: string
+  status: 'ok' | 'auth_error' | 'imap_error'
+  forwarded: number
+  error?: string
+}
 
-  await Promise.all(accounts.map(async account => {
-    const now = new Date().toISOString()
+interface PollSummary {
+  ok: boolean
+  startedAt: string
+  finishedAt: string
+  accounts: number
+  forwarded: number
+  results: AccountPollResult[]
+  error?: string
+}
 
-    try {
-      const { data: rules } = await supabase
-        .from('rules')
-        .select('id, name, from_filter, subject_filter, account_id, rule_recipients(recipients(email))')
-        .eq('account_id', account.id)
-        .eq('active', true)
+let activePoll: Promise<PollSummary> | null = null
+let lastPollSummary: PollSummary | null = null
 
-      const { data: recentLogs } = await supabase
-        .from('forwarded_log')
-        .select('message_id')
-        .eq('account_id', account.id)
-        .gte('forwarded_at', since7d.toISOString())
-        .not('message_id', 'is', null)
+async function runPoll(): Promise<PollSummary> {
+  const startedAt = new Date().toISOString()
+  const results: AccountPollResult[] = []
 
-      const alreadyForwarded = new Set<string>(
-        (recentLogs ?? []).map((l: { message_id: string }) => l.message_id).filter(Boolean)
-      )
+  try {
+    requireEnv('NEXT_PUBLIC_SUPABASE_URL')
+    requireEnv('SUPABASE_SERVICE_ROLE_KEY')
+    requireEnv('ENCRYPTION_SECRET')
+    requireEnv('SMTP_HOST')
+    requireEnv('SMTP_PORT')
+    requireEnv('SMTP_USER')
+    requireEnv('SMTP_PASS')
 
-      const formattedRules = (rules ?? []).map((r: Record<string, unknown>) => ({
-        id: r.id as string,
-        name: r.name as string,
-        from_filter: r.from_filter as string | null,
-        subject_filter: r.subject_filter as string | null,
-        recipients: ((r.rule_recipients as Array<{ recipients: { email: string } }>) ?? [])
-          .map(rr => rr.recipients?.email).filter(Boolean) as string[],
-      }))
+    const supabase = await createServiceClient()
 
-      const max1h = new Date(Date.now() - 60 * 60 * 1000)
-      const sinceDate = account.last_polled_at
-        ? new Date(Math.max(new Date(account.last_polled_at).getTime(), max1h.getTime()))
-        : max1h
+    const { data: accounts, error } = await supabase
+      .from('gmail_accounts')
+      .select('id, email, app_password_encrypted, last_polled_at')
+      .eq('active', true)
 
-      const forwarded = await pollAndForward(account, formattedRules, sinceDate, alreadyForwarded)
+    if (error) throw new Error(`Could not load Gmail accounts: ${error.message}`)
 
-      if (forwarded.length > 0) {
-        await supabase.from('forwarded_log').insert(
-          forwarded.map(r => ({
-            account_id: account.id,
-            subject: r.subject,
-            from_address: r.from,
-            forwarded_to: r.recipients,
-            rule_matched: r.ruleName,
-            message_id: r.messageId,
-          }))
+    const gmailAccounts = (accounts ?? []) as GmailAccount[]
+    const since7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
+
+    await Promise.all(gmailAccounts.map(async account => {
+      const now = new Date().toISOString()
+
+      try {
+        const { data: rules, error: rulesError } = await supabase
+          .from('rules')
+          .select('id, name, from_filter, subject_filter, account_id, rule_recipients(recipients(email))')
+          .eq('account_id', account.id)
+          .eq('active', true)
+
+        if (rulesError) throw new Error(`Could not load rules: ${rulesError.message}`)
+
+        const { data: recentLogs, error: logsError } = await supabase
+          .from('forwarded_log')
+          .select('message_id')
+          .eq('account_id', account.id)
+          .gte('forwarded_at', since7d.toISOString())
+          .not('message_id', 'is', null)
+
+        if (logsError) throw new Error(`Could not load forwarded log: ${logsError.message}`)
+
+        const alreadyForwarded = new Set<string>(
+          (recentLogs ?? []).map((l: { message_id: string }) => l.message_id).filter(Boolean)
         )
+
+        const formattedRules = ((rules ?? []) as unknown as RuleRow[]).map(rule => ({
+          id: rule.id,
+          name: rule.name,
+          from_filter: rule.from_filter,
+          subject_filter: rule.subject_filter,
+          recipients: getRecipientEmails(rule.rule_recipients),
+        }))
+
+        const sinceDate = getSinceDate(account.last_polled_at)
+        const forwarded = await pollAndForward(account, formattedRules, sinceDate, alreadyForwarded)
+
+        if (forwarded.length > 0) {
+          const { error: insertError } = await supabase.from('forwarded_log').insert(
+            forwarded.map(result => ({
+              account_id: account.id,
+              subject: result.subject,
+              from_address: result.from,
+              forwarded_to: result.recipients,
+              rule_matched: result.ruleName,
+              message_id: result.messageId,
+            }))
+          )
+
+          if (insertError) throw new Error(`Could not write forwarded log: ${insertError.message}`)
+        }
+
+        await supabase.from('gmail_accounts').update({
+          last_polled_at: now,
+          last_poll_status: 'ok',
+        }).eq('id', account.id)
+
+        results.push({
+          accountId: account.id,
+          email: account.email,
+          status: 'ok',
+          forwarded: forwarded.length,
+        })
+      } catch (err: unknown) {
+        const msg = errorMessage(err)
+        const status = classifyPollError(msg)
+
+        await supabase.from('gmail_accounts').update({
+          last_polled_at: now,
+          last_poll_status: `${status}: ${msg.slice(0, 200)}`,
+        }).eq('id', account.id)
+
+        results.push({
+          accountId: account.id,
+          email: account.email,
+          status,
+          forwarded: 0,
+          error: msg,
+        })
       }
+    }))
 
-      await supabase.from('gmail_accounts').update({
-        last_polled_at: now,
-        last_poll_status: 'ok',
-      }).eq('id', account.id)
-
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err)
-      const status = msg.includes('AUTHENTICATIONFAILED') || msg.includes('Invalid credentials') ||
-        msg.includes('auth') || msg.includes('LOGIN') ? 'auth_error' : 'imap_error'
-
-      await supabase.from('gmail_accounts').update({
-        last_polled_at: now,
-        last_poll_status: status + ': ' + msg.slice(0, 200),
-      }).eq('id', account.id)
+    const finishedAt = new Date().toISOString()
+    const summary: PollSummary = {
+      ok: results.every(result => result.status === 'ok'),
+      startedAt,
+      finishedAt,
+      accounts: gmailAccounts.length,
+      forwarded: results.reduce((total, result) => total + result.forwarded, 0),
+      results,
     }
-  }))
 
-  await supabase.from('app_state').upsert({
-    key: 'last_checked',
-    value: new Date().toISOString(),
-  })
+    await writePollState(summary)
+    return summary
+  } catch (err: unknown) {
+    const summary: PollSummary = {
+      ok: false,
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      accounts: results.length,
+      forwarded: results.reduce((total, result) => total + result.forwarded, 0),
+      results,
+      error: errorMessage(err),
+    }
+
+    await writePollState(summary).catch(() => {})
+    return summary
+  }
+}
+
+function startPoll() {
+  if (activePoll) return { started: false, promise: activePoll }
+
+  activePoll = runPoll()
+    .then(summary => {
+      lastPollSummary = summary
+      return summary
+    })
+    .catch(err => {
+      const summary: PollSummary = {
+        ok: false,
+        startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
+        accounts: 0,
+        forwarded: 0,
+        results: [],
+        error: errorMessage(err),
+      }
+      lastPollSummary = summary
+      console.error('poll-gmail failed', err)
+      return summary
+    })
+    .finally(() => {
+      activePoll = null
+    })
+
+  return { started: true, promise: activePoll }
+}
+
+async function writePollState(summary: PollSummary) {
+  const supabase = await createServiceClient()
+  await supabase.from('app_state').upsert([
+    { key: 'last_checked', value: summary.finishedAt },
+    { key: 'last_poll_summary', value: JSON.stringify(summary) },
+  ])
+}
+
+function getSinceDate(lastPolledAt: string | null) {
+  const configuredMinutes = Number(process.env.POLL_MAX_LOOKBACK_MINUTES ?? 24 * 60)
+  const maxLookbackMinutes = Number.isFinite(configuredMinutes) ? configuredMinutes : 24 * 60
+  const maxLookback = new Date(Date.now() - Math.max(maxLookbackMinutes, 1) * 60 * 1000)
+
+  if (!lastPolledAt) return maxLookback
+
+  const lastPoll = new Date(lastPolledAt)
+  if (Number.isNaN(lastPoll.getTime())) return maxLookback
+
+  return new Date(Math.max(lastPoll.getTime(), maxLookback.getTime()))
+}
+
+function getRecipientEmails(ruleRecipients: RuleRow['rule_recipients']) {
+  return (ruleRecipients ?? [])
+    .flatMap(rr => {
+      const recipients = rr?.recipients
+      if (!recipients) return []
+      return Array.isArray(recipients) ? recipients.map(recipient => recipient.email) : [recipients.email]
+    })
+    .filter((email): email is string => Boolean(email))
+}
+
+function classifyPollError(message: string): AccountPollResult['status'] {
+  const lower = message.toLowerCase()
+  if (
+    lower.includes('authenticationfailed') ||
+    lower.includes('invalid credentials') ||
+    lower.includes('auth') ||
+    lower.includes('login')
+  ) {
+    return 'auth_error'
+  }
+
+  return 'imap_error'
+}
+
+function isAuthorized(req: NextRequest) {
+  const expected = process.env.CRON_SECRET
+  if (!expected) return false
+
+  const querySecret = req.nextUrl.searchParams.get('secret')
+  const headerSecret = req.headers.get('x-cron-secret')
+  const bearerSecret = req.headers.get('authorization')?.replace(/^Bearer\s+/i, '')
+
+  return querySecret === expected || headerSecret === expected || bearerSecret === expected
+}
+
+function shouldWait(req: NextRequest) {
+  const wait = req.nextUrl.searchParams.get('wait')?.toLowerCase()
+  return wait === '1' || wait === 'true' || wait === 'yes'
+}
+
+function requireEnv(name: string) {
+  if (!process.env[name]) throw new Error(`Missing environment variable: ${name}`)
+}
+
+function errorMessage(err: unknown) {
+  return err instanceof Error ? err.message : String(err)
 }
 
 export async function GET(req: NextRequest) {
-  const secret = req.nextUrl.searchParams.get('secret')
-  if (secret !== process.env.CRON_SECRET) {
+  if (!isAuthorized(req)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  await runPoll().catch(() => {})
+  if (req.nextUrl.searchParams.get('status') === '1') {
+    return NextResponse.json({
+      ok: true,
+      running: Boolean(activePoll),
+      lastPollSummary,
+    })
+  }
 
-  return NextResponse.json({ ok: true })
+  const { started, promise } = startPoll()
+
+  if (shouldWait(req)) {
+    const summary = await promise
+    return NextResponse.json(
+      { ok: summary.ok, started, running: false, summary },
+      { status: summary.ok ? 200 : 500 }
+    )
+  }
+
+  return NextResponse.json(
+    {
+      ok: true,
+      started,
+      running: true,
+      lastPollSummary,
+    },
+    { status: started ? 202 : 200 }
+  )
+}
+
+export async function POST(req: NextRequest) {
+  return GET(req)
 }

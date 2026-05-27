@@ -16,6 +16,41 @@ bun dev
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
+## Railway / Render Cron
+
+Set these environment variables on the app service:
+
+```bash
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
+ENCRYPTION_SECRET=
+CRON_SECRET=
+SMTP_HOST=
+SMTP_PORT=
+SMTP_USER=
+SMTP_PASS=
+NEXT_PUBLIC_APP_URL=
+```
+
+Supabase Cron should call the app with `pg_net` and a header secret:
+
+```sql
+select cron.schedule(
+  'mailrelay-poll',
+  '* * * * *',
+  $$
+    select net.http_get(
+      url := 'https://YOUR_APP_URL/api/poll-gmail',
+      headers := jsonb_build_object('x-cron-secret', 'YOUR_CRON_SECRET'),
+      timeout_milliseconds := 15000
+    );
+  $$
+);
+```
+
+For manual verification, call `/api/poll-gmail?wait=1` with the same `x-cron-secret` header. Normal cron calls should omit `wait=1` so the endpoint returns quickly while the Node process runs the Gmail job.
+
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.

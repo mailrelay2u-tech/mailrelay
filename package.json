@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "test": "node --test tests/*.test.mjs",
-    "test:poll-real": "node scripts/test-real-poll.mjs --"
+    "test:poll-real": "node scripts/test-real-poll.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.10.2",

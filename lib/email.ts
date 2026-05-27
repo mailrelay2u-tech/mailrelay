@@ -1,13 +1,28 @@
 import nodemailer from 'nodemailer'
+import type SMTPTransport from 'nodemailer/lib/smtp-transport'
+import { promises as dns } from 'dns'
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST,
-  port: Number(process.env.SMTP_PORT),
-  secure: false,
-  auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-  tls: { family: 4 },
-} as any)
+async function createTransporter() {
+  let smtpHost = process.env.SMTP_HOST || 'smtp.gmail.com'
+  try {
+    const addrs = await dns.resolve4(smtpHost)
+    if (addrs.length > 0) smtpHost = addrs[0]
+  } catch {}
+
+  const options: SMTPTransport.Options = {
+    host: smtpHost,
+    port: Number(process.env.SMTP_PORT),
+    secure: false,
+    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+    tls: { rejectUnauthorized: false, servername: process.env.SMTP_HOST || 'smtp.gmail.com' },
+  }
+
+  return nodemailer.createTransport(options)
+}
+
+export async function getTransporter() {
+  return createTransporter()
+}
 
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || process.env.SMTP_USER
@@ -17,6 +32,7 @@ const ADMIN_EMAIL = process.env.ADMIN_EMAIL || process.env.SMTP_USER
  * Supabase Auth handles the actual verification link — this is just a branded welcome.
  */
 export async function sendWelcomeEmail(toEmail: string, name: string) {
+  const transporter = await getTransporter()
   await transporter.sendMail({
     from: `MailRelay <${process.env.SMTP_USER}>`,
     to: toEmail,
@@ -37,6 +53,7 @@ export async function sendWelcomeEmail(toEmail: string, name: string) {
  * Notifies the superadmin that a new user signed up.
  */
 export async function sendAdminNotification(name: string, email: string) {
+  const transporter = await getTransporter()
   await transporter.sendMail({
     from: `MailRelay <${process.env.SMTP_USER}>`,
     to: ADMIN_EMAIL,
@@ -53,6 +70,7 @@ export async function sendAdminNotification(name: string, email: string) {
  * Kept for manual invite flow if superadmin wants to invite someone directly.
  */
 export async function sendInviteCodeToAdmin(requesterName: string, requesterEmail: string, code: string) {
+  const transporter = await getTransporter()
   await transporter.sendMail({
     from: `MailRelay <${process.env.SMTP_USER}>`,
     to: ADMIN_EMAIL,
